@@ -1,0 +1,197 @@
+{
+  "repo": "acme/widgets",
+  "mainline_commits": 13,
+  "thresholds": {
+    "min_source_lines": 3,
+    "max_source_lines": 400,
+    "max_files": 12
+  },
+  "ranked": [
+    {
+      "number": 112,
+      "title": "fix: ship the logo",
+      "url": "https://github.com/acme/widgets/pull/112",
+      "merged_at": "2026-08-10T09:00:00Z",
+      "rank": 1,
+      "linked_issues": [
+        7
+      ],
+      "fix_signal": true,
+      "source_files": 2,
+      "source_lines_added": 3,
+      "source_lines_deleted": 0,
+      "test_files": 1,
+      "files_touched": 3,
+      "author_commits": 2,
+      "rank_reasons": [
+        "links issue #7",
+        "title or label marks a fix",
+        "author has 2 mainline commits",
+        "tie broken by PR number"
+      ],
+      "source_paths": [
+        "src/logo.png",
+        "src/logo.py"
+      ],
+      "test_paths": [
+        "tests/test_logo.py"
+      ]
+    },
+    {
+      "number": 101,
+      "title": "fix: handle an empty list in scan()",
+      "url": "https://github.com/acme/widgets/pull/101",
+      "merged_at": "2026-08-01T09:00:00Z",
+      "rank": 2,
+      "linked_issues": [
+        42
+      ],
+      "fix_signal": true,
+      "source_files": 2,
+      "source_lines_added": 6,
+      "source_lines_deleted": 1,
+      "test_files": 1,
+      "files_touched": 3,
+      "author_commits": 2,
+      "rank_reasons": [
+        "links issue #42",
+        "title or label marks a fix",
+        "author has 2 mainline commits",
+        "tie broken by PR number"
+      ],
+      "source_paths": [
+        "code.py",
+        "src/scan.py"
+      ],
+      "test_paths": [
+        "tests/conftest.py"
+      ]
+    },
+    {
+      "number": 113,
+      "title": "Handle a merge conflict marker",
+      "url": "https://github.com/acme/widgets/pull/113",
+      "merged_at": "2026-08-11T10:00:00Z",
+      "rank": 3,
+      "linked_issues": [],
+      "fix_signal": true,
+      "source_files": 1,
+      "source_lines_added": 4,
+      "source_lines_deleted": 0,
+      "test_files": 1,
+      "files_touched": 2,
+      "author_commits": 2,
+      "rank_reasons": [
+        "no linked issue",
+        "title or label marks a fix",
+        "author has 2 mainline commits",
+        "tie broken by PR number"
+      ],
+      "source_paths": [
+        "src/merged.py"
+      ],
+      "test_paths": [
+        "tests/test_merged.py"
+      ]
+    },
+    {
+      "number": 114,
+      "title": "Add retry to the client",
+      "url": "https://github.com/acme/widgets/pull/114",
+      "merged_at": "2026-08-12T09:00:00Z",
+      "rank": 4,
+      "linked_issues": [],
+      "fix_signal": false,
+      "source_files": 1,
+      "source_lines_added": 3,
+      "source_lines_deleted": 0,
+      "test_files": 1,
+      "files_touched": 2,
+      "author_commits": 11,
+      "rank_reasons": [
+        "no linked issue",
+        "no fix signal",
+        "author has 11 mainline commits",
+        "tie broken by PR number"
+      ],
+      "source_paths": [
+        "src/retry.py"
+      ],
+      "test_paths": [
+        "tests/test_retry.py"
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "number": 111,
+      "title": "chore: move the feature check into tests",
+      "excluded_by": [
+        "no-test-change"
+      ]
+    },
+    {
+      "number": 110,
+      "title": "fix: drop a stale check",
+      "excluded_by": [
+        "no-test-change"
+      ]
+    },
+    {
+      "number": 109,
+      "title": "fix: a merged PR that records no merge commit",
+      "excluded_by": [
+        "no-integration-commit"
+      ]
+    },
+    {
+      "number": 108,
+      "title": "fix: still open",
+      "excluded_by": [
+        "not-merged"
+      ]
+    },
+    {
+      "number": 107,
+      "title": "fix: bump the parser pin",
+      "excluded_by": [
+        "bot-author"
+      ]
+    },
+    {
+      "number": 106,
+      "title": "refactor: split the helpers",
+      "excluded_by": [
+        "too-many-files"
+      ]
+    },
+    {
+      "number": 105,
+      "title": "feat: generated lookup table",
+      "excluded_by": [
+        "source-too-large"
+      ]
+    },
+    {
+      "number": 104,
+      "title": "fix: off-by-one in tiny()",
+      "excluded_by": [
+        "source-too-small"
+      ]
+    },
+    {
+      "number": 103,
+      "title": "feat: add a feature flag",
+      "excluded_by": [
+        "no-test-change"
+      ]
+    },
+    {
+      "number": 102,
+      "title": "test: cover the add() edge cases",
+      "excluded_by": [
+        "no-source-change"
+      ]
+    }
+  ]
+}

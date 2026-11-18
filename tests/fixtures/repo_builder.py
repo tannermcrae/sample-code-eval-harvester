@@ -120,6 +120,111 @@ class MergeRequestFixture:
     merge_request: dict[str, Any]
 
 
+#: Where the coding-survey ``gh pr list`` template lives: one row per :data:`_FIX_SCENARIOS` PR (plus the
+#: two PRs that need no commit), its SHAs as ``{{MERGE_<n>}}`` / ``{{BASE_<n>}}`` / ``{{HEAD_<n>}}`` tokens.
+FIX_SURVEY_PAYLOAD = _GH_PAYLOAD_DIR / "fix_survey" / "prs.json"
+
+#: The second identity of the fix-history fixture: the author of PRs 104, 112, and the true-merge branch of
+#: 113. PR 112 spells the email in another case and the name differently — the same person to the survey.
+FIX_SECOND_AUTHOR = ("Other Author", "other@harvest.test")
+FIX_SECOND_AUTHOR_VARIANT = ("O. Author", "Other@Harvest.Test")
+
+#: One changed file in a scenario commit: text, raw bytes (a binary file), or ``None`` to delete it.
+_FileChange = str | bytes | None
+
+#: A 401-line source file — one line past the default ``--max-source-lines`` of 400.
+_BIG_SOURCE = "".join(f"ROW_{index} = {index}\n" for index in range(401))
+
+#: A few bytes git reads as binary (it holds a NUL), for the ``-\t-`` numstat record.
+_BINARY_LOGO = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x00\x01"
+
+#: A three-line test file; every test change in the fixture adds this many lines unless it says otherwise.
+_THREE_LINE_TEST = "def test_it() -> None:\n    value = 1\n    assert value == 1\n"
+
+#: The squash-merged scenarios of :meth:`RepoBuilder.build_fix_history`, in commit order: PR number, the
+#: files the commit writes, and its author (``None`` for the default identity). C-1 appends scenarios at the
+#: end only, so these SHAs — and the B-1 golden — never change.
+_FIX_SCENARIOS: tuple[tuple[int, dict[str, _FileChange], tuple[str, str] | None], ...] = (
+    # 101 clean: two source files (one modified, one new) and tests/conftest.py, which is a test, not source.
+    (
+        101,
+        {
+            "code.py": "def add(a: int, b: int) -> int:\n    total = a + b\n    return total\n",
+            "src/scan.py": "def scan(items):\n    if not items:\n        return 0\n    return sum(items)\n",
+            "tests/conftest.py": "import pytest\n\nITEMS = [1, 2]\n",
+        },
+        None,
+    ),
+    (
+        102,
+        {"tests/test_only.py": "def test_add() -> None:\n    assert 1 + 1 == 2\n    assert 0 + 0 == 0\n    assert 2 + 2 == 4\n"},
+        None,
+    ),
+    (103, {"src/feature.py": "FLAG = True\n\n\ndef enabled() -> bool:\n    return FLAG\n"}, None),
+    (104, {"src/tiny.py": "def tiny() -> int:\n    return 1\n", "tests/test_tiny.py": _THREE_LINE_TEST}, FIX_SECOND_AUTHOR),
+    (105, {"src/big.py": _BIG_SOURCE, "tests/test_big.py": _THREE_LINE_TEST}, None),
+    (
+        106,
+        {**{f"src/m{index:02d}.py": f"VALUE = {index}\n" for index in range(1, 13)}, "tests/test_m.py": _THREE_LINE_TEST},
+        None,
+    ),
+    (107, {"src/bot.py": "PIN = '1.2.3'\nOTHER = 1\nMORE = 2\n", "tests/test_bot.py": _THREE_LINE_TEST}, None),
+    # 110: the only test change deletes a test — no test can fail before this fix.
+    (110, {"src/remove.py": "def remove() -> None:\n    pass\n    return None\n", "tests/test_only.py": None}, None),
+    # 111: src/feature.py is renamed (unchanged) into tests/, so its new path is a test with 0 lines added.
+    (
+        111,
+        {
+            "src/feature.py": None,
+            "tests/test_feature.py": "FLAG = True\n\n\ndef enabled() -> bool:\n    return FLAG\n",
+            "src/rename_fix.py": "A = 1\nB = 2\nC = 3\n",
+        },
+        None,
+    ),
+    (
+        112,
+        {
+            "src/logo.png": _BINARY_LOGO,
+            "src/logo.py": "LOGO = 'logo.png'\nSIZE = 1\nKIND = 'png'\n",
+            "tests/test_logo.py": _THREE_LINE_TEST,
+        },
+        FIX_SECOND_AUTHOR_VARIANT,
+    ),
+)
+
+#: PR 113, the true merge: the branch commit's files (by :data:`FIX_SECOND_AUTHOR`), merged ``--no-ff``.
+_FIX_TRUE_MERGE_NUMBER = 113
+_FIX_TRUE_MERGE_FILES: dict[str, _FileChange] = {
+    "src/merged.py": "def merged() -> int:\n    first = 1\n    second = 2\n    return first + second\n",
+    "tests/test_merged.py": _THREE_LINE_TEST,
+}
+
+#: PR 114, a plain rankable change with no issue and no fix signal, committed after the true merge.
+_FIX_LAST_SCENARIO: tuple[int, dict[str, _FileChange]] = (
+    114,
+    {"src/retry.py": "RETRIES = 3\nDELAY = 1\nBACKOFF = 2\n", "tests/test_retry.py": _THREE_LINE_TEST},
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FixHistoryFixture:
+    """The coding-survey history: origin and clone, the SHA tokens, and the substituted ``gh pr list`` rows.
+
+    ``substitutions`` maps each payload token (``MERGE_<n>``, ``BASE_<n>``, ``HEAD_<n>``) to its real SHA;
+    ``pull_requests`` is :data:`FIX_SURVEY_PAYLOAD` with those tokens filled in.
+    """
+
+    origin: Path
+    clone: Path
+    substitutions: dict[str, str]
+    pull_requests: list[dict[str, Any]]
+
+    def write_payload(self, destination: Path) -> Path:
+        """Write :attr:`pull_requests` as a ``--from-json`` payload file and return its path."""
+        destination.write_text(json.dumps(self.pull_requests, indent=2), encoding="utf-8", newline="\n")
+        return destination
+
+
 class RepoBuilder:
     """Construct sealed fixture repositories and plant leaks in named channels. Holds no state."""
 
@@ -399,6 +504,91 @@ class RepoBuilder:
             merge_request=cls._load_payload_template(GLAB_PAYLOAD_DIR / "force_pushed" / "merge_request.json", subs),
         )
 
+    # ───────────────────────────── coding-survey history (coding-eval-harvest B-1) ─────────────────────────────
+
+    @classmethod
+    def build_fix_history(cls, root: Path) -> FixHistoryFixture:
+        """A mainline of merged fixes, one per coding-survey scenario, and a ``--no-local`` clone of it.
+
+        Each scenario in :data:`_FIX_SCENARIOS` is one squash commit on ``main`` at a fixed date; PR 113 is a
+        true ``git merge --no-ff`` of a branch written by a second author, so the merge commit's author is
+        not the fix's author. PRs 108 (open) and 109 (merged, no merge commit) need no commit at all.
+        """
+        origin = cls._init_origin(root)
+        substitutions: dict[str, str] = {}
+        day = 1
+        for number, files, author in _FIX_SCENARIOS:
+            cls._record_fix_commit(origin, number, files, author, day, substitutions)
+            day += 1
+        cls._commit_true_merge(origin, day, substitutions)
+        day += 1
+        cls._record_fix_commit(origin, _FIX_LAST_SCENARIO[0], _FIX_LAST_SCENARIO[1], None, day, substitutions)
+        clone = cls._clone(origin, root / "clone")
+        return FixHistoryFixture(
+            origin=origin,
+            clone=clone,
+            substitutions=substitutions,
+            pull_requests=cls._load_payload_list(FIX_SURVEY_PAYLOAD, substitutions),
+        )
+
+    @classmethod
+    def _record_fix_commit(  # noqa: PLR0913 — one scenario: repo, PR number, files, author, date, and the token map
+        cls,
+        origin: Path,
+        number: int,
+        files: dict[str, _FileChange],
+        author: tuple[str, str] | None,
+        day: int,
+        substitutions: dict[str, str],
+    ) -> None:
+        """Squash-commit one scenario's files on ``main`` and record its base and merge SHAs as tokens."""
+        substitutions[f"BASE_{number}"] = cls._head_sha(origin)
+        cls._write_files(origin, files)
+        merge_sha = cls._commit_index(origin, f"PR #{number}", date=f"2026-08-{day:02d}T09:00:00", author=author)
+        substitutions[f"MERGE_{number}"] = merge_sha
+        substitutions[f"HEAD_{number}"] = merge_sha
+
+    @classmethod
+    def _commit_true_merge(cls, origin: Path, day: int, substitutions: dict[str, str]) -> None:
+        """PR 113: a branch commit by the second author, merged into ``main`` with ``--no-ff`` by the default identity."""
+        number = _FIX_TRUE_MERGE_NUMBER
+        substitutions[f"BASE_{number}"] = cls._head_sha(origin)
+        cls._git(origin, "checkout", "--quiet", "-b", "topic")
+        cls._write_files(origin, _FIX_TRUE_MERGE_FILES)
+        date = f"2026-08-{day:02d}T09:00:00"
+        substitutions[f"HEAD_{number}"] = cls._commit_index(
+            origin, "handle the conflict marker", date=date, author=FIX_SECOND_AUTHOR
+        )
+        cls._git(origin, "checkout", "--quiet", "main")
+        cls._git(origin, "merge", "--quiet", "--no-ff", "--no-commit", "topic")
+        merge_date = f"2026-08-{day:02d}T10:00:00"
+        substitutions[f"MERGE_{number}"] = cls._commit_index(origin, f"Merge pull request #{number} from topic", date=merge_date)
+        cls._git(origin, "branch", "-D", "topic")
+
+    @classmethod
+    def _write_files(cls, repo: Path, files: dict[str, _FileChange]) -> None:
+        """Write, overwrite, or delete each file (``None`` deletes), then stage everything."""
+        for relative, content in files.items():
+            path = repo / relative
+            if content is None:
+                path.unlink()
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content, encoding="utf-8", newline="\n")
+        cls._git(repo, "add", "-A")
+
+    @staticmethod
+    def _load_payload_list(path: Path, substitutions: dict[str, str]) -> list[dict[str, Any]]:
+        """Load a JSON-list payload template and substitute the fixture's real SHAs for its tokens."""
+        text = path.read_text(encoding="utf-8")
+        for token, sha in substitutions.items():
+            text = text.replace(f"{{{{{token}}}}}", sha)
+        loaded: list[dict[str, Any]] = json.loads(text)
+        return loaded
+
     @classmethod
     def _init_origin(cls, root: Path) -> Path:
         """Create the origin repo with one mainline commit (the before-state) on ``main``."""
@@ -429,14 +619,18 @@ class RepoBuilder:
         return cls._commit_index(repo, message, date=date)
 
     @classmethod
-    def _commit_index(cls, repo: Path, message: str, *, date: str) -> str:
-        """Commit whatever is staged at a fixed author/committer ``date`` and return the SHA."""
+    def _commit_index(cls, repo: Path, message: str, *, date: str, author: tuple[str, str] | None = None) -> str:
+        """Commit whatever is staged at a fixed author/committer ``date`` and return the SHA.
+
+        ``author`` is ``(name, email)`` for this one commit only; the committer stays the fixture identity.
+        """
+        identity = {"GIT_AUTHOR_NAME": author[0], "GIT_AUTHOR_EMAIL": author[1]} if author else {}
         subprocess.run(  # noqa: S603 - literal argv[0], resolved binary via executable=  # nosec B603,B607
             ["git", "-C", str(repo), "commit", "--quiet", "--message", message],
             executable=_GIT,
             capture_output=True,
             text=True,
-            env={**_ISOLATED_ENV, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date},
+            env={**_ISOLATED_ENV, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date, **identity},
             check=True,
         )
         return cls._head_sha(repo)

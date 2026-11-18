@@ -526,6 +526,11 @@ class Survey:
         return sorted(roots)
 
     @staticmethod
+    def is_fix_subject(subject: str) -> bool:
+        """True when ``subject`` reads as repair work (``fix:``, ``hotfix``, ``feat(x): fix …``, a revert)."""
+        return bool(_FIX_SUBJECT.search(subject))
+
+    @staticmethod
     def issue_candidates(title: str, body: str, branch: str) -> list[str]:
         """Issue numbers this PR might close, from its title, body, and branch name."""
         found = set(_HASH_REF.findall(title)) | set(_HASH_REF.findall(body or ""))

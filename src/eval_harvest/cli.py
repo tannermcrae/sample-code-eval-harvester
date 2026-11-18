@@ -12,6 +12,7 @@ import codecs
 import io
 import json
 import re
+import shlex
 import sys
 from collections.abc import Sequence
 from enum import IntEnum
@@ -24,6 +25,7 @@ from eval_harvest.brief import Brief
 from eval_harvest.candidate import Candidate, CandidateDict, CommentDict, Emittability, Violation
 from eval_harvest.dataset import Dataset, DatasetRefusalError
 from eval_harvest.emit import Emit, EmitRefusalError, EmitResult
+from eval_harvest.fix_survey import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FixSurvey, FixSurveyCacheError, FixSurveyThresholds
 from eval_harvest.forge import Forge, ForgeError, PullRequestFacts
 from eval_harvest.forge_host import ForgeHost, ForgeHostError, ForgeKind, ForgeRemote
 from eval_harvest.gitlab import GitLab
@@ -344,8 +346,10 @@ class Cli:
         path) supplies the PR list; the rest tune the scan. The top-level ``--json`` selects the
         machine payload; ``--summary`` names the human table explicitly (the default rendering).
         """
+        # --clone is checked in the handler, not here: a coding page request (`--type coding --dataset D --page N`,
+        # the command a page's `next:` line prints) reads only the saved survey and names no clone.
         survey_parser.add_argument(
-            "--clone", type=Path, required=True, metavar="<dir>", help="path to the local clone (holds the pr/* refs)"
+            "--clone", type=Path, default=None, metavar="<dir>", help="path to the local clone (holds the pr/* refs)"
         )
         survey_parser.add_argument(
             "--repo",
@@ -363,7 +367,10 @@ class Cli:
         )
         Cli.add_forge_argument(survey_parser)
         survey_parser.add_argument(
-            "--state", default="all", choices=("all", "open", "closed", "merged"), help="which PR states to survey (default: all)"
+            "--state",
+            default=None,
+            choices=("all", "open", "closed", "merged"),
+            help="which PR states to survey (default: all; merged with --type coding)",
         )
         survey_parser.add_argument(
             "--limit", type=int, default=500, metavar="<n>", help="max PRs to fetch with gh or glab (default: 500)"
@@ -380,6 +387,61 @@ class Cli:
         )
         survey_parser.add_argument(
             "--summary", action="store_true", help="print the human table (the default rendering; --json prints the JSON payload)"
+        )
+        Cli.add_fix_survey_arguments(survey_parser)
+
+    @staticmethod
+    def add_fix_survey_arguments(survey_parser: argparse.ArgumentParser) -> None:
+        """Register the ``survey --type coding`` flags (tech plan §9); the thresholds default from FixSurveyThresholds."""
+        defaults = FixSurveyThresholds()
+        survey_parser.add_argument(
+            "--type",
+            default="review",
+            choices=("review", "coding"),
+            help="which datapoint the survey is for: review (the default) or coding (merged fixes with tests)",
+        )
+        survey_parser.add_argument(
+            "--dataset",
+            type=Path,
+            default=None,
+            metavar="<dir>",
+            help="coding only: the dataset directory that holds the saved survey",
+        )
+        survey_parser.add_argument(
+            "--page",
+            type=int,
+            default=None,
+            metavar="<n>",
+            help="coding only: print page n of the saved survey (no forge or git call)",
+        )
+        survey_parser.add_argument(
+            "--page-size",
+            type=int,
+            default=DEFAULT_PAGE_SIZE,
+            metavar="<k>",
+            help=f"coding only: rows per page, 1 to {MAX_PAGE_SIZE} (default: {DEFAULT_PAGE_SIZE})",
+        )
+        survey_parser.add_argument("--excluded", action="store_true", help="coding only: page through the excluded PRs instead")
+        survey_parser.add_argument(
+            "--min-source-lines",
+            type=int,
+            default=defaults.min_source_lines,
+            metavar="<n>",
+            help=f"coding only: exclude a fix that changes fewer source lines (default: {defaults.min_source_lines})",
+        )
+        survey_parser.add_argument(
+            "--max-source-lines",
+            type=int,
+            default=defaults.max_source_lines,
+            metavar="<n>",
+            help=f"coding only: exclude a fix that changes more source lines (default: {defaults.max_source_lines})",
+        )
+        survey_parser.add_argument(
+            "--max-files",
+            type=int,
+            default=defaults.max_files,
+            metavar="<n>",
+            help=f"coding only: exclude a fix that touches more files (default: {defaults.max_files})",
         )
 
     @staticmethod
@@ -716,7 +778,7 @@ class Cli:
         print(f"next: {instruction}")
 
     @classmethod
-    def handle_survey(cls, arguments: argparse.Namespace) -> int:
+    def handle_survey(cls, arguments: argparse.Namespace) -> int:  # noqa: PLR0911 — one return per exit class (§9)
         """Report the mechanical facts that decide which PRs are harvestable (tech plan §9, FR-5/10/11).
 
         Online: either fetches ``gh pr list`` (``--repo``) or replays a saved payload (``--from-json``),
@@ -724,6 +786,12 @@ class Cli:
         label. When no PR went through review it refuses ``no-review-iteration`` with the reviewed-vs-merged
         count rather than emit a worthless empty dataset (FR-11).
         """
+        if arguments.type == "coding":
+            return cls._handle_fix_survey(arguments)
+        if arguments.clone is None:
+            return cls._usage_error("the following arguments are required: --clone")
+        if arguments.state is None:
+            arguments.state = "all"
         json_mode: bool = arguments.json
         clone: Path = arguments.clone
         forge_remote = cls._survey_clone_remote_or_report(clone, arguments)
@@ -779,6 +847,139 @@ class Cli:
         )
         print(rendering, end="")
         return ExitCode.SUCCESS
+
+    # ───────────────────────────── survey --type coding ─────────────────────────────
+
+    @classmethod
+    def _handle_fix_survey(cls, arguments: argparse.Namespace) -> int:
+        """Survey merged PRs as coding fixes, save the result, and print one page (tech plan §9, FR-5 to FR-11).
+
+        A fresh run (``--repo`` or ``--from-json``) reads the forge list and the clone, writes
+        ``<dataset>/survey/fix-survey.json``, and prints page 1 (or ``--page``). A page request (``--page``
+        alone) reads only that file: no forge call and no git call (FR-8, NFR-2). The cache is written
+        before the ``no-harvestable-fix`` check, so ``--page 1 --excluded`` can still show why.
+        """
+        problem = cls._fix_survey_usage_problem(arguments)
+        if problem is not None:
+            return cls._usage_error(problem)
+        if arguments.page is not None and not arguments.repo and not arguments.from_json:
+            return cls._print_cached_fix_survey_page(arguments)
+        document = cls._run_fix_survey(arguments)
+        if not isinstance(document, dict):
+            return document  # a usage or runtime failure, already reported
+        if not document["ranked"]:
+            return cls._refuse_no_harvestable_fix(arguments, document)
+        RefusalLog.clear(arguments.dataset, "coding", cls._fix_survey_datapoint(arguments))
+        return cls._print_fix_survey_page(arguments, document)
+
+    @staticmethod
+    def _fix_survey_usage_problem(arguments: argparse.Namespace) -> str | None:
+        """Why the coding-survey flags cannot run, or ``None`` when they can."""
+        if arguments.dataset is None:
+            return "--type coding needs --dataset <dir> (the directory that holds the saved survey)"
+        if not 1 <= arguments.page_size <= MAX_PAGE_SIZE:
+            return f"--page-size must be from 1 to {MAX_PAGE_SIZE}, not {arguments.page_size}"
+        if arguments.page is not None and arguments.page < 1:
+            return f"--page must be 1 or more, not {arguments.page}"
+        return None
+
+    @classmethod
+    def _print_cached_fix_survey_page(cls, arguments: argparse.Namespace) -> int:
+        """Print one page from the saved survey, or refuse ``survey-cache-missing`` when there is none to read."""
+        dataset: Path = arguments.dataset
+        try:
+            document = FixSurvey.read_cache(dataset)
+        except FixSurveyCacheError as error:
+            fresh_run = f"eval-harvest survey --type coding --clone <dir> --repo <org/name> --dataset {shlex.quote(str(dataset))}"
+            return cls.refuse(
+                check="survey-cache-missing",
+                datapoint=str(dataset),
+                offending=str(error),
+                next_=f"run `{fresh_run}` first",
+                exit_code=ExitCode.REFUSAL,
+                json_mode=arguments.json,
+            )
+        return cls._print_fix_survey_page(arguments, document)
+
+    @classmethod
+    def _run_fix_survey(cls, arguments: argparse.Namespace) -> dict[str, Any] | int:
+        """Survey the forge list over the clone and save the result; an exit code when it cannot run.
+
+        No pull-head fetch: the coding survey reads only what the integration commit put on the mainline,
+        so it works on a clone that cannot fetch ``refs/pull/*`` (§9).
+        """
+        if arguments.clone is None:
+            return cls._usage_error(
+                "the following arguments are required: --clone (a page request needs only --dataset and --page)"
+            )
+        if arguments.state is None:
+            arguments.state = "merged"  # `all` would fill the survey with not-merged rows; an explicit --state wins
+        clone: Path = arguments.clone
+        forge_remote = cls._survey_clone_remote_or_report(clone, arguments)
+        if forge_remote is None:
+            return ExitCode.USAGE
+        pull_requests = cls._load_survey_pull_requests(arguments, forge_remote)
+        if pull_requests is None:
+            return ExitCode.RUNTIME_UNAVAILABLE if arguments.repo else ExitCode.USAGE
+        commits = Survey.mainline(clone, arguments.branch)
+        thresholds = FixSurveyThresholds(
+            min_source_lines=arguments.min_source_lines,
+            max_source_lines=arguments.max_source_lines,
+            max_files=arguments.max_files,
+        )
+        ranked, excluded = FixSurvey.rank(FixSurvey.survey(clone, pull_requests, commits, thresholds))
+        document = FixSurvey.result_document(arguments.repo or "", len(commits), thresholds, ranked, excluded)
+        FixSurvey.write_cache(arguments.dataset, document)
+        return document
+
+    @staticmethod
+    def _fix_survey_datapoint(arguments: argparse.Namespace) -> str:
+        """What a coding survey's refusal names: the ``--repo`` value, else the clone's absolute path."""
+        return str(arguments.repo) if arguments.repo else Path(arguments.clone).resolve().as_posix()
+
+    @classmethod
+    def _refuse_no_harvestable_fix(cls, arguments: argparse.Namespace, document: dict[str, Any]) -> int:
+        """Refuse ``no-harvestable-fix`` with the dominant reason in plain words, and keep the refusal (FR-11, FR-33)."""
+        dataset: Path = arguments.dataset
+        record = RefusalRecordDict(
+            check="no-harvestable-fix",
+            datapoint=cls._fix_survey_datapoint(arguments),
+            offending=FixSurvey.no_harvestable_fix_offending(document),
+            next=FixSurvey.no_harvestable_fix_next(document, dataset=dataset),
+            verb="survey",
+        )
+        RefusalLog.write(dataset, "coding", record)
+        return cls.refuse(
+            check=record["check"],
+            datapoint=record["datapoint"],
+            offending=record["offending"],
+            next_=record["next"],
+            exit_code=ExitCode.REFUSAL,
+            json_mode=arguments.json,
+        )
+
+    @staticmethod
+    def _print_fix_survey_page(arguments: argparse.Namespace, document: dict[str, Any]) -> int:
+        """Print the requested page (human or ``--json``); a page past the end is a usage error naming the count."""
+        page: int = arguments.page or 1
+        render = FixSurvey.render_page_json if arguments.json else FixSurvey.render_page
+        try:
+            text = render(
+                document, page=page, page_size=arguments.page_size, excluded=arguments.excluded, dataset=arguments.dataset
+            )
+        except ValueError:
+            rows = document["excluded"] if arguments.excluded else document["ranked"]
+            pages = FixSurvey.page_count(len(rows), arguments.page_size)
+            print(f"eval-harvest survey: page {page} does not exist; the survey has {pages} page(s)", file=sys.stderr)
+            return ExitCode.USAGE
+        print(text, end="")
+        return ExitCode.SUCCESS
+
+    @staticmethod
+    def _usage_error(message: str) -> int:
+        """Print an argparse-style usage error for ``survey`` and return the usage exit code."""
+        print(f"eval-harvest survey: error: {message}", file=sys.stderr)
+        return ExitCode.USAGE
 
     @classmethod
     def _survey_clone_remote_or_report(cls, clone: Path, arguments: argparse.Namespace) -> ForgeRemote | None:

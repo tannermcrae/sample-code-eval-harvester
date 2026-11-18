@@ -4,7 +4,7 @@ title: "[Survey] Add the paged coding survey"
 summary: "Add survey --type coding: facts and exclusion reasons for each merged PR, a fixed rank, a saved result, and small pages."
 feature: coding-eval-harvest
 workstream: Survey
-status: in-progress
+status: done
 complexity: L
 merges: [B-1, B-2, B-3]
 implements: [FR-5, FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-33, NFR-1, NFR-2, NFR-3, NFR-4, NFR-5]
@@ -284,19 +284,19 @@ Manual checks:
 
 ## Acceptance Criteria
 
-- [ ] `FixSurvey.survey_one` returns every field of `FixFactsDict` for a merged PR, with values from the clone. The output contains no diff text.
-- [ ] Each of the eight reasons fires alone on its fixture PR, and `excluded_by` is in the fixed order.
-- [ ] A non-merged PR makes no git call. A merged PR makes at most 6 git calls.
-- [ ] The ranked order follows the fixed key, and each row has `rank` and four `rank_reasons`.
-- [ ] `fix-survey.json` has the §8 keys in a fixed order, and two runs give the same bytes.
-- [ ] Each page has at most `page_size` rows (default 20, maximum 50), titles of at most 80 characters, and exactly one `next:` line. Every page of the 500-row test is within the byte budget.
-- [ ] `survey --type coding` writes `<dataset>/survey/fix-survey.json` and prints page 1.
-- [ ] `--page <n>` without `--repo` or `--from-json` prints page *n* from the cache, and makes no forge call and no git call.
-- [ ] When every PR is excluded, the command refuses `no-harvestable-fix` (exit 3), names the most frequent reason in plain words, and writes a refusal record.
-- [ ] The coding survey makes one forge list query and one mainline pass, and no pull-head fetch.
-- [ ] Every review survey test passes without change, and the review golden output does not change.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
+- [x] `FixSurvey.survey_one` returns every field of `FixFactsDict` for a merged PR, with values from the clone. The output contains no diff text.
+- [x] Each of the eight reasons fires alone on its fixture PR, and `excluded_by` is in the fixed order.
+- [x] A non-merged PR makes no git call. A merged PR makes at most 6 git calls.
+- [x] The ranked order follows the fixed key, and each row has `rank` and four `rank_reasons`.
+- [x] `fix-survey.json` has the §8 keys in a fixed order, and two runs give the same bytes.
+- [x] Each page has at most `page_size` rows (default 20, maximum 50), titles of at most 80 characters, and exactly one `next:` line. Every page of the 500-row test is within the byte budget.
+- [x] `survey --type coding` writes `<dataset>/survey/fix-survey.json` and prints page 1.
+- [x] `--page <n>` without `--repo` or `--from-json` prints page *n* from the cache, and makes no forge call and no git call.
+- [x] When every PR is excluded, the command refuses `no-harvestable-fix` (exit 3), names the most frequent reason in plain words, and writes a refusal record.
+- [x] The coding survey makes one forge list query and one mainline pass, and no pull-head fetch.
+- [x] Every review survey test passes without change, and the review golden output does not change.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
 
 ## Out Of Scope
 
@@ -343,3 +343,47 @@ Manual checks:
 
 **Blocked by:** [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md) (`Commit.author_email`, `PatchSplit.is_test_path`, `RefusalLog`)
 **Blocks:** [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md), [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md), [G-1](G-1-measure-the-coding-survey-yield-on-real-repositories.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `paged-coding-survey-b-1`  ·  **Commit:** the single `feat(survey): add the paged coding survey [B-1]` commit on `main`, after `chore(tasks): claim B-1`
+
+**What was implemented:** `eval-harvest survey --type coding`. A new online-layer module, `fix_survey.py`, reports facts and exclusion reasons for each merged PR. It uses 3 git calls for a squash PR, 4 for a true merge, and none for an unmerged PR. It ranks the usable PRs with the fixed ADR-6 key and gives reasons for each rank. It writes `<dataset>/survey/fix-survey.json` atomically and deterministically, and renders human and `--json` pages that read only that file. The CLI dispatches `--type coding` before the unchanged review path, and refuses `no-harvestable-fix` (with a record under `refusals/coding/`) or `survey-cache-missing`.
+
+**Files changed:**
+- `src/eval_harvest/fix_survey.py` — new: `FixSurvey`, `FixSurveyThresholds`, `FixFactsDict`, `FixSurveyCacheError`, the reason tuple, the page constants, the renderers, and the refusal text.
+- `src/eval_harvest/survey.py` — `Survey.is_fix_subject` only.
+- `src/eval_harvest/cli.py` — the coding flags (`add_fix_survey_arguments`), `--clone`/`--state` now checked or resolved in the handler, `_handle_fix_survey` and its step methods.
+- `tests/fixtures/repo_builder.py` — `FixHistoryFixture`, `RepoBuilder.build_fix_history` (12 committed scenarios plus 2 commit-less PRs; C-1 appends at the end), and an optional per-commit `author` on `_commit_index`.
+- `tests/fixtures/gh/fix_survey/prs.json`, `expected-fix-survey.json` — the payload template and the golden cache.
+- `tests/integration/test_fix_survey.py`, `tests/unit/test_fix_survey_pages.py`, `tests/integration/test_fix_survey_cli.py` — 83 tests covering every row of Tests To Write, plus a few more (reason order, numstat parser, cache key order, overwrite, histogram order, refusal text for each reason).
+
+**Acceptance criteria:**
+- Facts with no diff text: `test_clean_fix_facts`.
+- Each reason fires alone, in the fixed order: `test_each_reason_fires_alone`, `test_every_reason_has_a_scenario`, `test_reasons_keep_the_fixed_order`.
+- Git-call limits: `test_git_calls_per_pr_at_most_six`.
+- Rank order and four reasons: `test_sort_key_one_key_at_a_time`, `test_sort_key_order_between_keys`, `test_rank_reasons_name_each_key`.
+- §8 key order and byte-identical runs: `test_cache_has_the_fixed_keys`, `test_cache_is_byte_identical_twice` (golden).
+- Page limits and byte budget: `test_page_size_limits`, `test_page_titles_and_issues_are_cut`, `test_title_newlines_do_not_break_rows`, `test_page_bytes_below_budget` (8 KiB straw man; G-1 sets the final value).
+- Cache write and page 1: `test_fresh_run_writes_the_cache_and_prints_page_one`.
+- Offline `--page`: `test_page_two_is_offline` and `test_cache_written_before_refusal` (git, gh, and glab replaced by functions that raise).
+- Refusal and record: `test_all_no_test_change_refuses_plain_words`, `test_refusal_is_recorded`.
+- One forge query, one mainline pass, no pull-head fetch: `test_one_forge_query_and_one_mainline_pass`, `test_no_pull_head_fetch_for_coding`.
+- Review unchanged: `tests/integration/test_survey.py` (including `test_survey_matches_golden`) passes with no edit. `test_review_still_requires_clone` and `test_state_defaults` cover the review side of the two parser changes.
+- How To Verify, no regressions, no new dependencies: `mise run check` is green (ruff, bandit, strict mypy, 597 passed). `[project].dependencies` is untouched.
+- Each guard was broken on purpose (15 mutations: `<=` thresholds, no splitter, merge-commit author, uncut titles, a reversed sort key, no issue cap, full excluded rows, deleted-only tests, `--no-renames`, zero pages, page request through git, cache after refusal, `--state all`, refusal not recorded, pull-head fetch). The matching test went red each time, then the code was restored.
+- Manual E2E with the built console script on the fixture: fresh run → page 1 with a `--page 2` next line, page 2 from the cache, `--json`, and `survey-cache-missing` (exit 3). On a real repository (`pallets/itsdangerous`, `--limit 200`): exit 0 in about 44 s, 8 ranked, 192 excluded (`no-test-change` 188, `bot-author` 133), and `--page 2 --page-size 3` was read from the cache.
+
+**Deviations from the task:**
+- **Issue lists are capped at 3 on pages and in `rank_reasons`** (`#1, #2, #3 (+27 more)`). The task's own 500-row worst case (30 issues per row) goes past the 8 KiB budget with every number printed. The cache's `linked_issues` keeps the full list.
+- **`no_harvestable_fix_next(document, *, dataset)`** takes the dataset, because the `no-test-change` action prints the `--excluded` command for that dataset, and the document does not store the dataset.
+- **The `next:` line repeats `--page-size k` when k is not 20.** Without it, page 2 of a 3-row page would start at row 21.
+- **`read_cache` also requires an `excluded` list.** The renderers read it, so a document without it would end in a traceback, not a refusal.
+- **A successful coding survey clears that datapoint's old `refusals/coding/` record.** This follows the RefusalLog contract that the log holds only current reasons. `test_success_clears_an_old_refusal` covers it.
+- **The `excluded (N)` section is printed only when N > 0,** which matches the review histogram's rule.
+- **For the true merge, the fix author's count is mainline commits only,** as specified. The branch commits on the second parent are not on the first-parent mainline.
+
+**Follow-ups noticed but not done:**
+- On itsdangerous, two ranked PRs show `author has 0 mainline commits`. Their integration commit is probably not on `main`'s first-parent chain (for example, merged to a maintenance branch), so `_integrated_at` returns 0. G-1 should look at this, and maybe exclude or flag such PRs.
+- When `--from-json` is given without `--repo`, the refusal datapoint is the clone's absolute POSIX path. On Windows that gives a file name that contains `:` (NFR-10). This is not exercised.
+- The `eval` and main `.venv` run CPython 3.14 while the project pins 3.12. mypy and bandit target 3.12, so the gate is still meaningful, but `uv run` picks 3.14.
