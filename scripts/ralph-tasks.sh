@@ -175,7 +175,7 @@ If the skill tells you to stop and ask the user, follow the skill's failure path
 claim on main, write the reason in the task's Completion Log, remove the worktree, and end the run."
 
   set +e
-  claude "${claude_args[@]}" "$prompt" 2>&1 | tee "$log"
+  claude "${claude_args[@]}" -- "$prompt" 2>&1 | tee "$log"
   exit_code="${PIPESTATUS[0]}"
   set -e
 
