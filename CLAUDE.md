@@ -12,6 +12,8 @@ decisions log, and the task board — before inferring architecture from the cod
 - `docs/features/pr-eval-harvest/tech-plan.md` — the technical design; `tasks/` is the task board.
 - `docs/features/gitlab-forge/` — GitLab merge-request harvesting, a brownfield feature on top of
   pr-eval-harvest, with its own PRD, tech plan, and decision logs.
+- `docs/features/coding-eval-harvest/` — coding-agent eval datapoints (Senior SWE-Bench-style), a
+  second datapoint type on the same CLI, with its own PRD, tech plan, and decision logs.
 - `src/eval_harvest/` — the CLI package (zero runtime deps).
 - `harvest_env/` — the packaged `harvest-env` distribution: the Lambda MicroVMs execution environment
   for Harbor, built as Workstream H (tech plan §13) and loaded into an unmodified Harbor by import

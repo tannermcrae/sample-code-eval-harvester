@@ -510,7 +510,8 @@ build.
   produces the evidence for that decision, not the CI integration that acts on it.
 - Non-GitHub forges. (GitLab was later brought into scope as its own feature: `../gitlab-forge/prd.md`.)
 - Eval types other than PR review. The CLI is "agent-native for creating evals" in ambition;
-  v1 does one kind.
+  v1 does one kind. (Coding-agent datapoints were later brought into scope as their own feature:
+  `../coding-eval-harvest/prd.md`.)
 - Pooling history across repositories.
 
 **Cut:**
@@ -524,7 +525,8 @@ build.
 - **The extension wire protocol, content-addressed store, and evidence graph.** Machinery for a
   general harvesting platform. This mines one source through one path.
 - **Publication, witnessed tags, governance, a public leaderboard.**
-- **PR authoring evaluation and coding-agent benchmarks generally.**
+- **PR authoring evaluation and coding-agent benchmarks generally.** (Reversed 2026-11-17 for coding-agent datapoints:
+  `../coding-eval-harvest/prd.md`.)
 
 ## 11. Discovery: The 5 Customer Questions
 
