@@ -27,7 +27,7 @@ from fixtures.repo_builder import PullRequestFixture, RepoBuilder
 from eval_harvest.batch import Batch, BatchReport, ItemResult
 from eval_harvest.candidate import Candidate, CandidateDict, FindingDict
 from eval_harvest.cli import Cli, ExitCode
-from eval_harvest.forge import Forge
+from eval_harvest.forge import Forge, ForgeError
 from eval_harvest.survey import Survey
 from eval_harvest.tomlw import emit_document
 
@@ -476,3 +476,74 @@ class TestEmitBatchCli:
         parsed = json.loads(captured.out)  # would raise if a progress line corrupted stdout
         assert parsed["summary"]["succeeded"] == 2
         assert "1/2" in captured.err and "2/2" in captured.err, "progress belongs on stderr"
+
+
+# ───────────────────────── the per-datapoint refusal log (coding-eval-harvest A-2, Part 4) ─────────────────────────
+
+
+class TestBatchRefusalLog:
+    """Batch `capture` and `emit --all` file each item refusal under the same name the single verb would."""
+
+    def test_batch_emit_record_uses_kind_datapoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: PullRequestFixture
+    ) -> None:
+        """A refused `emit --all` item is filed as `pr-<n>__<kind>.json` (the datapoint), not `pr-<n>.json` (the batch key)."""
+        dataset = _dataset_with_filled_candidates(tmp_path, monkeypatch, fixture, [11, 22], break_last=True)
+
+        assert Cli.run(["emit", "--all", "--kind", "reject", "--dataset", str(dataset)]) == ExitCode.REFUSAL
+
+        records = sorted(p.name for p in (dataset / "refusals" / "review").iterdir())
+        assert records == ["pr-22__reject.json"]
+        record = json.loads((dataset / "refusals" / "review" / "pr-22__reject.json").read_text(encoding="utf-8"))
+        assert (record["datapoint"], record["verb"]) == ("pr-22/reject", "emit")
+
+    def test_batch_emit_success_clears_earlier_refusal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: PullRequestFixture
+    ) -> None:
+        """Once the broken candidate is filled, the next `emit --all` removes its refusal record."""
+        dataset = _dataset_with_filled_candidates(tmp_path, monkeypatch, fixture, [11, 22], break_last=True)
+        Cli.run(["emit", "--all", "--kind", "reject", "--dataset", str(dataset)])
+        record_path = dataset / "refusals" / "review" / "pr-22__reject.json"
+        assert record_path.is_file()
+
+        _fill(dataset / "candidates" / "pr-22.json", _substantive_findings())
+        # pr-11 already landed, so it refuses as a duplicate now; pr-22 is the one that must clear.
+        Cli.run(["emit", "--all", "--kind", "reject", "--dataset", str(dataset)])
+        assert not record_path.exists()
+
+    def test_batch_capture_records_forge_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: PullRequestFixture
+    ) -> None:
+        """A batch item's forge failure is the `forge-unavailable` refusal, filed under `pr-<n>` with verb `capture`."""
+
+        def failing_capture(repo: str, pr_number: int, clone: Path, base_ref: str = "HEAD", *, remote: str = "origin") -> object:
+            raise ForgeError(f"gh api repos/{repo}/pulls/{pr_number}/reviews failed (1): HTTP 502")
+
+        monkeypatch.setattr(Forge, "capture", staticmethod(failing_capture))
+        dataset = _dataset(tmp_path, "ds")
+        survey = _write_survey(tmp_path / "s.json", _row(11, blockers=[]))
+
+        code = Cli.run(["capture", "--from-survey", str(survey), "--clone", str(fixture.clone), "--dataset", str(dataset)])
+
+        assert code == ExitCode.REFUSAL
+        record = json.loads((dataset / "refusals" / "review" / "pr-11.json").read_text(encoding="utf-8"))
+        assert (record["check"], record["datapoint"], record["verb"]) == ("forge-unavailable", "pr-11", "capture")
+
+    def test_batch_capture_success_clears_earlier_refusal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: PullRequestFixture
+    ) -> None:
+        """A batch capture that succeeds for a PR removes that PR's earlier refusal record."""
+        dataset = _dataset(tmp_path, "ds")
+        stale = dataset / "refusals" / "review" / "pr-11.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text(
+            json.dumps({"check": "forge-unavailable", "datapoint": "pr-11", "offending": "o", "next": "n", "verb": "capture"}),
+            encoding="utf-8",
+        )
+        _mock_forge_capture(monkeypatch, fixture)
+        survey = _write_survey(tmp_path / "s.json", _row(11, blockers=[]))
+
+        code = Cli.run(["capture", "--from-survey", str(survey), "--clone", str(fixture.clone), "--dataset", str(dataset)])
+
+        assert code == ExitCode.SUCCESS
+        assert not stale.exists()

@@ -129,3 +129,17 @@ for now."* The customer runs the tasks in Harbor's Docker environment.
 
 **All communication with the user is in ASD-STE100.** The user said: *"Can you talk to me in ASD
 STE100. I can't follow you"*. This applies to chat replies, not only to the documents.
+
+## 2026-11-18 — task A-2, the refusal log
+
+**`capture` and `emit` now also write `refusals/review/<datapoint>.json` on a per-datapoint
+refusal (TP-5, FR-33).** This is a contract change: the pr-eval-harvest log pins "the files each
+verb writes" (`docs/features/pr-eval-harvest/decisions-tech-plan.md:346`). The new file is one JSON
+object with the four refusal fields plus `verb`. `/` in the datapoint becomes `__` in the file name,
+so `emit`'s `pr-<n>/<kind>` is `pr-<n>__<kind>.json`. A later success for the same datapoint removes
+the file, so the directory holds the current reasons only. stdout, stderr, and exit codes do not
+change. Refusals that are not about one datapoint (`unknown-pr`, `no-clean-pr`, `no-candidates`, the
+risk-map refusals) are not logged. A forge failure in single-PR `capture` is exit 5, not a refusal,
+so it is not logged either; in a batch the same failure is the item refusal `forge-unavailable`, and
+it is logged. `dataset` reads `tasks/` only and `emit --all` reads `candidates/*.json` only, so
+neither trips on the new directory.

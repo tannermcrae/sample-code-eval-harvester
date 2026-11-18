@@ -27,6 +27,7 @@ from eval_harvest.emit import Emit, EmitRefusalError, EmitResult
 from eval_harvest.forge import Forge, ForgeError, PullRequestFacts
 from eval_harvest.forge_host import ForgeHost, ForgeHostError, ForgeKind, ForgeRemote
 from eval_harvest.gitlab import GitLab
+from eval_harvest.refusal_log import RefusalLog, RefusalRecordDict
 from eval_harvest.riskmap import RISK_MAP_FILENAME, RiskMap
 from eval_harvest.rubric import RUBRIC_FILENAME, Rubric
 from eval_harvest.show import Show
@@ -897,6 +898,14 @@ class Cli:
         )
         if not emittability.recoverable_indices:
             offending, next_ = cls._no_emittable_refusal_fields(candidate, pr_number, remote)
+            cls._log_refusal(
+                dataset,
+                check="no-emittable-iteration",
+                datapoint=f"pr-{pr_number}",
+                offending=offending,
+                next_=next_,
+                verb="capture",
+            )
             return cls.refuse(
                 check="no-emittable-iteration",
                 datapoint=f"pr-{pr_number}",
@@ -905,6 +914,7 @@ class Cli:
                 exit_code=ExitCode.REFUSAL,
                 json_mode=json_mode,
             )
+        cls._clear_refusal(dataset, f"pr-{pr_number}")
         cls._report_capture(candidate_path, candidate, emittability, json_mode=json_mode)
         return ExitCode.SUCCESS
 
@@ -999,19 +1009,19 @@ class Cli:
         try:
             facts = cls._capture_facts(remote, pr_number, clone)
         except ForgeError as error:
-            return ItemResult.refuse(
-                key,
-                pr_number,
-                check="forge-unavailable",
-                offending=str(error),
-                next_="the forge call failed for this PR; the batch continued — re-run `capture <pr>` alone to inspect it",
-            )
+            next_ = "the forge call failed for this PR; the batch continued — re-run `capture <pr>` alone to inspect it"
+            cls._log_refusal(dataset, check="forge-unavailable", datapoint=key, offending=str(error), next_=next_, verb="capture")
+            return ItemResult.refuse(key, pr_number, check="forge-unavailable", offending=str(error), next_=next_)
         candidate_path, candidate, emittability = cls._write_capture_candidate(
             pr_number, remote=remote, dataset=dataset, facts=facts, risk_map=risk_map
         )
         if not emittability.recoverable_indices:
             offending, next_ = cls._no_emittable_refusal_fields(candidate, pr_number, remote)
+            cls._log_refusal(
+                dataset, check="no-emittable-iteration", datapoint=key, offending=offending, next_=next_, verb="capture"
+            )
             return ItemResult.refuse(key, pr_number, check="no-emittable-iteration", offending=offending, next_=next_)
+        cls._clear_refusal(dataset, key)
         return ItemResult.success(
             key, pr_number, payload=cls._capture_payload(candidate_path, candidate, emittability), detail=f"→ {candidate_path}"
         )
@@ -1464,6 +1474,7 @@ class Cli:
                 iteration_index=iteration_index,
             )
         except EmitRefusalError as refusal:
+            cls._log_emit_refusal(dataset_dir, refusal)
             return cls.refuse(
                 check=refusal.check,
                 datapoint=refusal.datapoint,
@@ -1472,6 +1483,7 @@ class Cli:
                 exit_code=refusal.exit_code,
                 json_mode=json_mode,
             )
+        cls._clear_refusal(dataset_dir, f"pr-{candidate['pr_number']}/{kind}")
         cls._report_emit(result, json_mode=json_mode)
         return ExitCode.SUCCESS
 
@@ -1539,8 +1551,42 @@ class Cli:
                 candidate, kind=kind, dataset_dir=dataset_dir, overrides=overrides, clone=clone, iteration_index=iteration_index
             )
         except EmitRefusalError as refusal:
+            # The log is keyed by the emit datapoint (`pr-<n>/<kind>`), not the batch key (`pr-<n>`), so a
+            # batch refusal and a single refusal of the same datapoint are the same file.
+            cls._log_emit_refusal(dataset_dir, refusal)
             return ItemResult.refuse(key, pr_number, check=refusal.check, offending=refusal.offending, next_=refusal.next_)
+        cls._clear_refusal(dataset_dir, f"pr-{candidate['pr_number']}/{kind}")
         return ItemResult.success(key, pr_number, payload=cls._emit_payload(result), detail=f"→ {result.path}")
+
+    @classmethod
+    def _log_emit_refusal(cls, dataset_dir: Path, refusal: EmitRefusalError) -> None:
+        """File one ``emit`` refusal under its own datapoint (``pr-<n>/<kind>``)."""
+        cls._log_refusal(
+            dataset_dir,
+            check=refusal.check,
+            datapoint=refusal.datapoint,
+            offending=refusal.offending,
+            next_=refusal.next_,
+            verb="emit",
+        )
+
+    # The FR-2 four fields plus the dataset and the verb; the count is the record's shape, so PLR0913 is suppressed.
+    @staticmethod
+    def _log_refusal(  # noqa: PLR0913
+        dataset: Path, *, check: str, datapoint: str, offending: str, next_: str, verb: str
+    ) -> None:
+        """Keep a per-datapoint review refusal as ``<dataset>/refusals/review/<datapoint>.json`` (FR-33).
+
+        Only refusals about one datapoint are logged; a refusal whose ``datapoint`` is a file path
+        (``unknown-pr``, ``no-clean-pr``, ``no-candidates``, the risk-map refusals) is not.
+        """
+        record = RefusalRecordDict(check=check, datapoint=datapoint, offending=offending, next=next_, verb=verb)
+        RefusalLog.write(dataset, "review", record)
+
+    @staticmethod
+    def _clear_refusal(dataset: Path, datapoint: str) -> None:
+        """Remove a review datapoint's refusal record after it succeeds, so the log holds only current reasons."""
+        RefusalLog.clear(dataset, "review", datapoint)
 
     @staticmethod
     def _pr_number_from_stem(stem: str) -> int | None:
