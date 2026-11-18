@@ -4,7 +4,7 @@ title: "[Emit] Write the coding task templates and the reward stack"
 summary: "Write the fixed files of every coding task: two Dockerfiles, the instruction, the oracle script, and the ported reward stack."
 feature: coding-eval-harvest
 workstream: Emit
-status: in-progress
+status: done
 complexity: L
 merges: [D-1, D-2]
 implements: [FR-20, FR-27, FR-34, NFR-8]
@@ -277,18 +277,18 @@ No test runs a container (§12). The reward-stack tests run the Python stages wi
 
 ## Acceptance Criteria
 
-- [ ] All files in "Files Affected" exist in `src/eval_harvest/verifier_tpl/fix/`.
-- [ ] The sealing lines are byte-identical to the review template.
-- [ ] Every slot in the slot table occurs in the template that it names, and in no other template.
-- [ ] No file in `verifier_tpl/` (outside `fix/`) changes.
-- [ ] The `tests/verify/tests.toml` schema in this file is the one that the verifier reads.
-- [ ] `reward.json` has exactly the 10 `fix_` keys of ADR-5.
-- [ ] `verifiers.json` gives one value for each hidden id, in the §8 id format.
-- [ ] A base test file that the agent changed is restored before the hidden tests run.
-- [ ] No Python stage runs with the repository's Python environment.
-- [ ] `tests/unit/test_no_model_client.py` stays green. It skips `verifier_tpl/` by design (its line 33).
-- [ ] All commands in "How To Verify" pass, including `mise run security`.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
+- [x] All files in "Files Affected" exist in `src/eval_harvest/verifier_tpl/fix/`.
+- [x] The sealing lines are byte-identical to the review template.
+- [x] Every slot in the slot table occurs in the template that it names, and in no other template.
+- [x] No file in `verifier_tpl/` (outside `fix/`) changes.
+- [x] The `tests/verify/tests.toml` schema in this file is the one that the verifier reads.
+- [x] `reward.json` has exactly the 10 `fix_` keys of ADR-5.
+- [x] `verifiers.json` gives one value for each hidden id, in the §8 id format.
+- [x] A base test file that the agent changed is restored before the hidden tests run.
+- [x] No Python stage runs with the repository's Python environment.
+- [x] `tests/unit/test_no_model_client.py` stays green. It skips `verifier_tpl/` by design (its line 33).
+- [x] All commands in "How To Verify" pass, including `mise run security`.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
 
 ## Out Of Scope
 
@@ -319,3 +319,73 @@ No test runs a container (§12). The reward-stack tests run the Python stages wi
 
 **Blocked by:** nothing. You can start now.
 **Blocks:** [D-2](D-2-assemble-and-promote-coding-tasks-with-emit-kind-fix.md), [E-1](E-1-add-the-static-coding-checks-to-verify.md), [E-2](E-2-resolve-hidden-tests-proven-and-add-the-guard-tests.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `coding-templates-reward-stack-d-1`  ·  **Commit:** the one `[D-1]` commit on `main` after `chore(tasks): claim D-1`
+
+**What was implemented:** The fixed files of every coding task under `verifier_tpl/fix/`: the sealed agent
+Dockerfile, the verifier Dockerfile, the canonical instruction, the oracle `solve.sh`, and the notebook 03
+reward stack. The stack was ported to separate verifier mode, any JUnit-writing test runner, and the ten
+ADR-5 `fix_` keys. A new `hidden_tests.py` stage restores the base test paths, deletes protected paths the
+agent added, runs `test_command`, and writes per-id results to `verifiers.json`.
+
+**Files changed:**
+- `src/eval_harvest/verifier_tpl/fix/Dockerfile.tmpl`: new header, then review lines 8–34 byte-for-byte, then the lockfile `COPY` and `@SETUP_STEPS@`.
+- `src/eval_harvest/verifier_tpl/fix/verifier.Dockerfile.tmpl`: the same prefix, then `/work/base`, `boto3 --target`, and the `/tests` copies.
+- `src/eval_harvest/verifier_tpl/fix/instruction.md`, `solve.sh`: the canonical text and the oracle.
+- `src/eval_harvest/verifier_tpl/fix/test.sh`: from the notebook, changed as in step 14.
+- `src/eval_harvest/verifier_tpl/fix/lib/{bedrock,aggregate,judges,agent_tests,validate}.py`: copied (first commit on the branch is a plain copy), then ported; `lib/hidden_tests.py` is new.
+- `src/eval_harvest/verifier_tpl/fix/judge/models.toml`: the notebook file, unchanged.
+- `pyproject.toml`: a mypy override for the module name `bedrock`.
+- `tests/fixtures/repo_builder.py`: `build_coding_base_repository`, `commit_working_tree`, `isolated_git_variables`.
+- `tests/unit/test_fix_templates.py`, `tests/integration/test_fix_reward_stack.py`: the tests of "Tests To Write", plus a few guards (listed below).
+
+**Acceptance criteria:** Each is covered by a test in the two new files, except "no file in `verifier_tpl/`
+outside `fix/` changes" (`git diff --stat main -- src/eval_harvest/verifier_tpl` lists only `fix/` files)
+and the How To Verify commands, which all passed (`mise run check`: lint, format, strict mypy, bandit,
+gitleaks, semgrep 0 findings, checkov, 585 tests). Every new guard was watched fail: each of 12 reward-stack
+invariants and 9 template invariants was broken on purpose, its test went red, and the change was reverted.
+Manual check 1 (the two Dockerfiles agree up to `@SETUP_STEPS@`) was done with `diff`. Manual check 2 (a
+Docker build of the verifier image on the notebook task) was not run: this project runs on Lambda
+MicroVMs, not local Docker. The oracle and nop trials of §15 remain the real proof.
+
+**Deviations from the task:**
+- **JUnit id rule, classname branch.** The rule as written ("the classname path ends with the repo path
+  without its extension") cannot match a Java classname `com.example.FooTest` to
+  `src/test/java/com/example/FooTest.java`, which the `test_junit_id_matching` row asks for. The
+  implementation also accepts the reverse direction at a `/` boundary (the repo path ends with
+  `/` + classname path). Every case the written rule matches still matches.
+- **A skipped hidden test is `failed`**, not `passed` (the schema has no `skipped` value). A skipped
+  existing-suite test does not fail the suite, as in the notebook.
+- **`test_hidden_tests_deletes_agent_conftest`** uses a `conftest.py` that turns failures into passes, not one
+  that skips. A skipped hidden test is already `failed`, so a skipping conftest would pass the test even if
+  the deletion were missing.
+- **`test.sh` prefers `/usr/bin/python3`** and falls back to `python3`. A setup step can put a virtual environment
+  first on `PATH`, and then `python3` is the repository's Python.
+- **`PYTHONPATH` is removed from the environment** of the commands that run the repository's code
+  (`bedrock.repository_environment()`, used by `hidden_tests.py` and `agent_tests.py`), so the verifier's boto3
+  directory does not shadow the repository's own packages.
+- **boto3 is imported where a Bedrock client is made** (as `score.py` does), so the stages that call no model
+  import without it, and the dev test suite can load them.
+- **`judges.py` documentation rule** is exactly `.md`, `.rst`, `.txt`, and `CHANGELOG`, as step 11 says. The
+  notebook regex also excluded `docs/` directories; that part is gone.
+- **Semgrep `use-defused-xml-parse`** fires on the three `xml.etree` parses. Each has a `# nosemgrep` with the
+  reason (the stdlib expat parser resolves no external entity; an entity bomb only stops that trial),
+  as `eval/judge/client.py:114` does. `defusedxml` is not available in the verifier (stdlib and boto3 only).
+  Semgrep does not flag the `bash -c <test_command>` call, so it has no suppression.
+- **mypy:** a `mypy_path` entry (real types across the sibling imports) makes mypy see each file under two
+  module names and stop, so the `ignore_missing_imports` override from Notes & Gotchas is used.
+- **Shallow functions:** long notebook functions (`Conversation.ask`, `validate.run_stories`,
+  `aggregate.main`) have their loop bodies extracted into named functions, with the same logic. The modules
+  stay functions, not classes (`CODING_STANDARDS.md` §1), so the port diff against the plain copy stays reviewable.
+
+**Follow-ups noticed but not done:**
+- The JUnit rule does not match pytest class-based tests without a `file` attribute (`classname` ends with the
+  class name). F-1's help should tell the agent to use `-o junit_family=xunit1`, as the example command does.
+- `mise run security` runs checkov on `infrastructure/terraform` only, so the `checkov:skip` lines in the
+  Dockerfile templates are not scanned today (the Notes & Gotchas `[TODO: verify]`).
+- The `[TODO: verify]` about `pip install --target` and PEP 668 on `buildpack-deps:bookworm` is still open: it
+  needs an image build. D-2's first oracle trial will show it.
+- The worktree and main `.venv` run Python 3.14 (`uv run` picks the newest interpreter; `requires-python` is
+  `>=3.12`), although `CLAUDE.md` pins 3.12.

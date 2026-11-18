@@ -116,6 +116,15 @@ module = ["boto3", "boto3.*", "botocore", "botocore.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# The coding verifier stages under `verifier_tpl/fix/lib/` run as scripts from `/tests/lib` in the verifier image
+# and import their shared helpers as a top-level module (`from bedrock import ...`). mypy names those files by
+# their package path (`eval_harvest.verifier_tpl.fix.lib.bedrock`, a namespace package), so the bare name
+# `bedrock` does not resolve; a `mypy_path` entry instead makes mypy see the same file under two names and
+# stop. Each stage is still checked in full; only the names it imports from `bedrock` are `Any` to it.
+module = ["bedrock"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # `harvest_env`, `microvms`, and `dockerfile_parse` live in the `eval` group, which `mise run
 # typecheck` does not sync, so mypy sees them as absent. `eval/runner.py`'s preflight imports them
 # by literal statement (so no dynamic-import construct exists for security scanners to flag); treating

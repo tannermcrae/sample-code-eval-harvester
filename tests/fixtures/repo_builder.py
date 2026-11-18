@@ -137,6 +137,39 @@ class RepoBuilder:
         cls._git(root, "commit", "--quiet", "--message", "initial commit")
         return root
 
+    #: The base of the coding fixture (D-1): `add` has the bug the fail-to-pass test finds; `double` is right.
+    CODING_BASE_SOURCE = "def add(a, b):\n    return a - b\n\n\ndef double(a):\n    return a * 2\n"
+    #: The base's own test of `double`: the existing suite, which passes on the base.
+    CODING_BASE_TEST = "from src.calc import double\n\n\ndef test_double():\n    assert double(2) == 4\n"
+
+    @classmethod
+    def build_coding_base_repository(cls, root: Path) -> tuple[Path, str]:
+        """A repository whose single commit is the base of a coding fix; returns the repository and the commit.
+
+        ``src/calc.py`` has a bug in ``add``, and ``tests/test_calc.py`` is the existing suite (it passes
+        on the base). The reward-stack tests write the agent's change on top and commit it with
+        :meth:`commit_working_tree`, the way the verifier's ``test.sh`` does.
+        """
+        repo = root / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "tests").mkdir()
+        cls._git(repo, "init", "--quiet", "--initial-branch=main")
+        (repo / "src" / "calc.py").write_text(cls.CODING_BASE_SOURCE, encoding="utf-8", newline="\n")
+        (repo / "tests" / "test_calc.py").write_text(cls.CODING_BASE_TEST, encoding="utf-8", newline="\n")
+        return repo, cls.commit_working_tree(repo, "base commit")
+
+    @classmethod
+    def commit_working_tree(cls, repo: Path, message: str) -> str:
+        """Commit every change in the working tree (an empty commit when there is none) and return the SHA."""
+        cls._git(repo, "add", "-A")
+        cls._git(repo, "commit", "--quiet", "--allow-empty", "--message", message)
+        return cls._head_sha(repo)
+
+    @staticmethod
+    def isolated_git_variables() -> dict[str, str]:
+        """The git isolation and identity variables of the fixtures, for code under test that runs git itself."""
+        return {name: value for name, value in _ISOLATED_ENV.items() if name != "PATH"}
+
     @classmethod
     def plant_alternates(cls, repo: Path, source_objects: Path) -> None:
         """Point ``objects/info/alternates`` at another object store — the motivating leak."""
