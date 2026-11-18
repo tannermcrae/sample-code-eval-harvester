@@ -4,7 +4,7 @@ title: "[Prerequisites] Add the shared prerequisites for coding datapoints"
 summary: "Add the small shared parts that the coding verbs need: author email, test-file rule, Harbor fields, refusal log, issue fetch."
 feature: coding-eval-harvest
 workstream: Prerequisites
-status: todo
+status: in-progress
 complexity: L
 merges: [A-1, A-2, A-3, A-4, A-5]
 implements: [TP-1, TP-2, TP-3, TP-5, TP-6, FR-5, FR-6, FR-12, FR-13, FR-33, FR-34, NFR-4, NFR-5]
