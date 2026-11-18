@@ -94,9 +94,9 @@ TEST_MARKERS = (
 _FS = "\x1f"
 _RS = "\x1e"
 
-#: A well-formed ``git log`` record splits into this many fields: sha, author-time, subject, body,
-#: names. Short records are truncated output and get skipped.
-_LOG_RECORD_FIELDS = 5
+#: A well-formed ``git log`` record splits into this many fields: sha, author-time, author-email,
+#: subject, body, names. Short records are truncated output and get skipped.
+_LOG_RECORD_FIELDS = 6
 
 #: A commit with at least this many parents is a true merge (two sides joined), not a squash/ff.
 _TRUE_MERGE_MIN_PARENTS = 2
@@ -126,6 +126,7 @@ class Commit:
 
     sha: str
     at: int
+    author_email: str  # lowercased, "" when git gives none
     subject: str
     body: str
     paths: frozenset[str]
@@ -296,10 +297,13 @@ class Survey:
 
         One call rather than one per PR: the follow-up scan is an in-memory join between two path
         sets, which turns 194 ``git log -- <paths>`` invocations into zero. ``--first-parent`` is
-        what "mainline" means — the integration history, linear on a squash-merging repo.
+        what "mainline" means — the integration history, linear on a squash-merging repo. The raw
+        author email (``%ae``, not the mailmapped ``%aE``, so a ``.mailmap`` edit cannot change the
+        output for the same clone) rides in the same pass, ahead of the free-text subject and body, so
+        the coding survey's per-PR author count costs no extra git call (NFR-5).
         """
         code, out = GitCommandRunner.git(
-            clone, "log", "--first-parent", f"--format={_RS}%H{_FS}%at{_FS}%s{_FS}%b{_FS}", "--name-only", branch
+            clone, "log", "--first-parent", f"--format={_RS}%H{_FS}%at{_FS}%ae{_FS}%s{_FS}%b{_FS}", "--name-only", branch
         )
         if code != 0:
             raise SurveyError(f"git log {branch} failed in {clone}; is the clone complete?")
@@ -313,10 +317,12 @@ class Survey:
         parts = record.split(_FS)
         if len(parts) < _LOG_RECORD_FIELDS:
             return None
-        sha, at, subject, body, names = parts[0], parts[1], parts[2], parts[3], parts[4]
+        sha, at, email, subject, body, names = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
         return Commit(
             sha=sha.strip(),
             at=int(at) if at.strip().isdigit() else 0,
+            # git keeps the case each commit wrote; lowercase so two spellings of one author compare equal.
+            author_email=email.strip().lower(),
             subject=subject.strip(),
             body=body,
             paths=frozenset(line for line in names.split("\n") if line.strip()),

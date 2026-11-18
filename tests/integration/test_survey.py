@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fixtures.repo_builder import RepoBuilder
+from fixtures.repo_builder import FIXTURE_AUTHOR_EMAIL, RepoBuilder
 
 from eval_harvest.cli import Cli, ExitCode
 from eval_harvest.forge import Forge
@@ -397,3 +397,43 @@ def test_blocker_remedies_cover_only_real_blockers() -> None:
     never_fires = set(_STATIC_BLOCKER_REMEDIES) - produced
     assert not never_fires, f"remedy for a blocker that never fires: {never_fires}"
     assert produced <= set(_STATIC_BLOCKER_REMEDIES) | _FETCH_REMEDY_BLOCKERS, "a blocker with no remedy"
+
+
+# ───────────────────────────── author email (coding-eval-harvest A-2, TP-1) ─────────────────────────────
+
+
+def test_mainline_records_author_email(tmp_path: Path) -> None:
+    """Every mainline commit carries the fixture identity's email, lowercased, from the one log pass."""
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    commits = Survey.mainline(fixture.clone, "main")
+    assert commits
+    assert {commit.author_email for commit in commits} == {FIXTURE_AUTHOR_EMAIL.lower()}
+    # git keeps the case each commit wrote; the parser lowercases so B-1 can compare emails.
+    record = f"{'a' * 40}\x1f1700000000\x1f Eval@Harvest.TEST \x1fsubject\x1fbody\x1f\ncode.py\n"
+    parsed = Survey._parse_commit_record(record)
+    assert parsed is not None
+    assert parsed.author_email == "eval@harvest.test"
+
+
+def test_mainline_subject_and_body_survive_the_new_field(tmp_path: Path) -> None:
+    """The squash commit's subject and paths stay in their own fields after ``%ae`` joins the format."""
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    squash = Survey.mainline(fixture.clone, "main")[0]
+    assert squash.subject == f"squash: feature (#{fixture.pr_number})"
+    assert squash.paths == frozenset({"code.py"})
+    assert squash.body.strip() == ""
+
+
+def test_mainline_is_one_git_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mainline, email included, comes from exactly one ``git`` invocation (NFR-5)."""
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    real_git = GitCommandRunner.git
+    calls: list[tuple[str, ...]] = []
+
+    def counting_git(repo: Path, *args: str) -> tuple[int, str]:
+        calls.append(args)
+        return real_git(repo, *args)
+
+    monkeypatch.setattr(GitCommandRunner, "git", staticmethod(counting_git))
+    Survey.mainline(fixture.clone, "main")
+    assert len(calls) == 1

@@ -90,6 +90,10 @@ _ISOLATED_ENV = {
     "TZ": "UTC",
 }
 
+#: The author email every fixture commit carries — read by tests that check the survey's email field,
+#: so the identity is written down once (here) and not retyped in each test.
+FIXTURE_AUTHOR_EMAIL = _ISOLATED_ENV["GIT_AUTHOR_EMAIL"]
+
 
 #: The merge-request iid the GitLab fixture uses, matched by its payload template.
 _FIXTURE_MR_IID = 7
