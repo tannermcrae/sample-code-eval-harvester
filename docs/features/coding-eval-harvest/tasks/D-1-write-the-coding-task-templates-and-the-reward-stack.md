@@ -4,7 +4,7 @@ title: "[Emit] Write the coding task templates and the reward stack"
 summary: "Write the fixed files of every coding task: two Dockerfiles, the instruction, the oracle script, and the ported reward stack."
 feature: coding-eval-harvest
 workstream: Emit
-status: todo
+status: in-progress
 complexity: L
 merges: [D-1, D-2]
 implements: [FR-20, FR-27, FR-34, NFR-8]
