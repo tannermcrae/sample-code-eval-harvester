@@ -16,7 +16,7 @@ and `G-2` here is §13 `G-1`.
 
 | ID | Title | What it does | Status | Blocked By | Complexity |
 |----|-------|--------------|--------|-----------|-----------|
-| [A-1](A-1-fix-the-two-existing-survey-and-registry-defects.md) | [Prerequisites] Fix the two existing survey and registry defects | Stop the review survey from blocking PRs that have no tests. Write `registry.json` as a list that Harbor can load. Two separate commits. | todo | — | M |
+| [A-1](A-1-fix-the-two-existing-survey-and-registry-defects.md) | [Prerequisites] Fix the two existing survey and registry defects | Stop the review survey from blocking PRs that have no tests. Write `registry.json` as a list that Harbor can load. Two separate commits. | in-progress | — | M |
 | [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md) | [Prerequisites] Add the shared prerequisites for coding datapoints | Add the small shared parts: author email in the survey, one test-file rule, Harbor fields for coding tasks, a refusal log, and issue fetch. | todo | A-1 | L |
 | [B-1](B-1-add-the-paged-coding-survey.md) | [Survey] Add the paged coding survey | Add `survey --type coding`. It gives facts and exclusion reasons for each merged PR, a fixed rank, a saved result, and small pages. | todo | A-2 | L |
 | [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md) | [Capture] Add the coding candidate and capture --type coding | Make the coding candidate file and its checks. `capture --type coding` writes it from one PR or from the survey. | todo | A-2, B-1 | L |

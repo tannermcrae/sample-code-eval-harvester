@@ -4,7 +4,7 @@ title: "[Prerequisites] Fix the two existing survey and registry defects"
 summary: "Stop the review survey from blocking PRs without tests, and write registry.json as a list that Harbor loads."
 feature: coding-eval-harvest
 workstream: Prerequisites
-status: todo
+status: in-progress
 complexity: M
 merges: [A-0, A-6]
 implements: [TP-7, TP-8, FR-34]
