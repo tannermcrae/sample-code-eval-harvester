@@ -78,6 +78,24 @@ _VALIDATION_SPEC_RELPATH: Final = "tests/validate/validation_spec.toml"
 _RUBRIC_SPEC_RELPATH: Final = "tests/judge/rubric.toml"
 _HIDDEN_TESTS_SPEC_RELPATH: Final = f"{HIDDEN_TESTS_RELDIR}/{_HIDDEN_TESTS_SPEC_FILENAME}"
 _FAIL_TO_PASS: Final = "fail_to_pass"
+_PASS_TO_PASS: Final = "pass_to_pass"
+
+#: The two trials a runner records in `proofs/<task-dir>.json` (§8), in report order: the `nop` agent
+#: changes nothing (the base), the `oracle` agent applies the fix.
+_NOP_TRIAL: Final = "nop"
+_ORACLE_TRIAL: Final = "oracle"
+_PROOF_TRIALS: Final = (_NOP_TRIAL, _ORACLE_TRIAL)
+#: The trial statuses a proof may carry (§8). Any other value makes the proof invalid (unresolved).
+_TRIAL_COMPLETED: Final = "completed"
+_TRIAL_BUILD_FAILED: Final = "build-failed"
+_TRIAL_STATUSES: Final = (_TRIAL_COMPLETED, _TRIAL_BUILD_FAILED)
+#: The one result that counts as a pass, for a test and for the existing suite. Every other value
+#: (`failed`, `error`, `skipped`, …) is "not passed": a fail-to-pass test that errors at the base
+#: because it imports a symbol the fix adds still observes the bug.
+_RESULT_PASSED: Final = "passed"
+_NO_VALID_PROOF: Final = "no valid proof: fail-to-pass and pass-to-pass need an oracle trial and a nop trial"
+_RUN_THE_RUNNER: Final = "a runner writes proofs/<task-dir>.json; then run `eval-harvest verify <task-dir>` again"
+_RERUN_TRIALS: Final = "emit again, and run the trials again"
 
 #: The honesty guard's control token (FR-36/NFR-6). `verify` plants it into a copy of the scanned
 #: corpus; if `seal.scan_agent_visible` does not find it, the scan did not really read the corpus, so
@@ -177,6 +195,29 @@ class ContentScanSummary:
     suppressed: tuple[SuppressedToken, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ProofTrial:
+    """One trial of a runner's proof (§8): its status, the failed build step, and the per-test results.
+
+    `tests` maps a test id (`<repo_path>::<name>`) to its result; `existing_suite` is the result of
+    the repository's own suite. Both results are `passed` or anything else (not passed)."""
+
+    status: str
+    build_error: str
+    tests: dict[str, str]
+    existing_suite: str
+
+
+@dataclass(frozen=True, slots=True)
+class HiddenTestsProof:
+    """A runner's proof file `proofs/<task-dir>.json` (§8, FR-35), parsed and type-checked. The CLI never writes it."""
+
+    content_digest: str
+    runner: str
+    nop: ProofTrial
+    oracle: ProofTrial
+
+
 #: The canonical checks `verify_task` runs, in order — the names a reader (and `emit`'s report) uses
 #: to say which checks ran and passed. One name per `_check_*` helper: each helper is one check that
 #: either passes (no refusal), fails (exit 4), or is unresolved (exit 5). Stated as data so `emit`'s
@@ -192,7 +233,7 @@ CHECK_NAMES: Final = (
 
 #: The checks `verify_task` runs on a coding task, in order. The review list (`CHECK_NAMES`) stays
 #: as it is, so the review report does not change (NFR-9). `hidden-tests-proven` is unresolved until a
-#: runner writes a proof (ADR-2: the CLI does not run the repository's code).
+#: runner writes a valid proof (ADR-2: the CLI does not run the repository's code; FR-35).
 CODING_CHECK_NAMES: Final = (
     "base-and-patch",
     "content-absence",
@@ -288,6 +329,7 @@ class Verify:
         plant_control_token: bool = True,
         plant_instruction_control_token: bool = True,
         base_oracle: BaseTreeOracle | None = None,
+        proof_path: Path | None = None,
     ) -> VerifyReport:
         """Verify the emitted `task_dir` and return every refusal, aggregated (FR-39: never stop at the first).
 
@@ -308,6 +350,10 @@ class Verify:
         No value or `review` runs `CHECK_NAMES`; `coding` runs `CODING_CHECK_NAMES`;
         `plant_instruction_control_token=False` skips the coding instruction scan's own plant. Any other
         value fails `unknown-datapoint-type` and runs nothing else.
+
+        `proof_path` is the runner's proof file for a coding task (FR-35); `None` leaves
+        `hidden-tests-proven` unresolved. The CLI picks the default `<dataset>/proofs/<task-dir>.json`;
+        this method never guesses one, so `emit` (a temporary directory) never reads a stray proof.
         """
         origin, harvest = cls._read_task_config(task_dir)
         datapoint = cls._datapoint(origin, harvest, task_dir)
@@ -321,7 +367,9 @@ class Verify:
             by_check, content_scan = cls._coding_checks(
                 task_dir,
                 origin,
+                harvest,
                 datapoint,
+                proof_path=proof_path,
                 clone=clone,
                 materialized_seal=materialized_seal,
                 base_oracle=base_oracle,
@@ -382,14 +430,16 @@ class Verify:
         ]
         return by_check, content_scan
 
-    # Eight parameters, for the same reason as `_review_checks`: each is one input of `verify_task`.
+    # Ten parameters, for the same reason as `_review_checks`: each is one input of `verify_task`.
     @classmethod
     def _coding_checks(  # noqa: PLR0913
         cls,
         task_dir: Path,
         origin: dict[str, object],
+        harvest: dict[str, object],
         datapoint: str,
         *,
+        proof_path: Path | None,
         clone: Path | None,
         materialized_seal: Path | None,
         base_oracle: BaseTreeOracle | None,
@@ -399,8 +449,8 @@ class Verify:
         """The coding checks, one `(name, refusals)` entry per name in `CODING_CHECK_NAMES`, and the scan arithmetic.
 
         The two review-only checks are not run: they read `tests/oracle.json` and `tests/rubric.md`,
-        which a coding task does not have. `hidden-tests-proven` is always unresolved here (E-2 reads
-        the runner's proof).
+        which a coding task does not have. `hidden-tests-proven` is resolved from the runner's proof
+        at `proof_path` (FR-35), and is unresolved without a valid one (ADR-2).
         """
         content_refusals, content_scan = cls._check_content_absence(
             task_dir,
@@ -418,7 +468,7 @@ class Verify:
             ("instruction-uniform", cls._check_instruction_uniform(task_dir, datapoint)),
             ("answer-placement", cls._check_answer_placement(task_dir, datapoint)),
             ("spec-coherent", cls._check_spec_coherent(task_dir, datapoint)),
-            ("hidden-tests-proven", cls._check_hidden_tests_unresolved(datapoint)),
+            ("hidden-tests-proven", cls.check_hidden_tests_proven(task_dir, harvest, proof_path, datapoint)),
             ("git-channel-absence", cls._check_git_channels(materialized_seal, datapoint)),
         ]
         return by_check, content_scan
@@ -913,20 +963,190 @@ class Verify:
     # ───────────────────────────── hidden tests proven (FR-23, NFR-8) ─────────────────────────────
 
     @classmethod
-    def _check_hidden_tests_unresolved(cls, datapoint: str) -> list[VerifyRefusal]:
-        """`hidden-tests-proven` is unresolved: only a runner's trials can prove the hidden tests (ADR-2).
+    def check_hidden_tests_proven(
+        cls, task_dir: Path, harvest: dict[str, object], proof_path: Path | None, datapoint: str
+    ) -> list[VerifyRefusal]:
+        """Resolve `hidden-tests-proven` from the runner's proof (FR-35, FR-23). `[]` means proven.
 
-        Never a pass. The fail-to-pass and pass-to-pass claims need an oracle trial and a nop trial,
-        and the CLI does not run the repository's code. E-2 replaces this with the proof reader.
+        One unresolved refusal (exit 5) when there is no valid proof: no path, no file, a parse error, a
+        missing or mistyped field, or a `content_digest` that is not the task's recorded digest (a stale
+        proof). A `base-does-not-build` failure for each trial that did not build. Otherwise one
+        `hidden-tests-proven` failure for each listed test (and each existing suite) that breaks a rule.
+        Public because `dataset` (F-1) counts the coding datapoints that are not proven.
+
+        The test ids and kinds come from `tests/verify/tests.toml`, never from the proof, so a proof
+        cannot drop a test by leaving it out. The runner is trusted: the digest stops a stale proof, not
+        a false one (ADR-2).
         """
-        return [
-            cls._unresolved(
-                "hidden-tests-proven",
-                datapoint,
-                "no valid proof: fail-to-pass and pass-to-pass need an oracle trial and a nop trial",
-                "a runner writes proofs/<task-dir>.json; then run `eval-harvest verify <task-dir>` again",
-            )
+        proof, problem = cls._load_proof(proof_path)
+        if proof is None:
+            return [cls._no_valid_proof(datapoint, problem)]
+        task_digest = harvest.get("content_digest")
+        if not isinstance(task_digest, str) or not task_digest:
+            return [cls._no_valid_proof(datapoint, "task.toml has no [metadata.harvest].content_digest to compare with")]
+        if proof.content_digest != task_digest:
+            stale = f"stale proof: its content_digest {proof.content_digest!r} is not the task digest {task_digest!r}"
+            return [cls._no_valid_proof(datapoint, stale)]
+        build_failures = [
+            cls._base_does_not_build(trial_name, trial, datapoint)
+            for trial_name, trial in ((_NOP_TRIAL, proof.nop), (_ORACLE_TRIAL, proof.oracle))
+            if trial.status == _TRIAL_BUILD_FAILED
         ]
+        if build_failures:
+            return build_failures
+        listed_tests = cls._listed_hidden_tests(task_dir)
+        return [
+            *cls._nop_trial_refusals(proof.nop, listed_tests, datapoint),
+            *cls._oracle_trial_refusals(proof.oracle, listed_tests, datapoint),
+        ]
+
+    @classmethod
+    def _load_proof(cls, proof_path: Path | None) -> tuple[HiddenTestsProof | None, str]:
+        """The parsed proof at `proof_path`, or `None` and the reason it is not a valid proof."""
+        if proof_path is None:
+            return None, "no proof file was given"
+        if not proof_path.is_file():
+            return None, f"{proof_path} does not exist"
+        try:
+            document = json.loads(proof_path.read_bytes().decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            return None, f"{proof_path} does not parse: {error}"
+        proof, problem = cls._parse_proof(document)
+        return proof, (f"{proof_path}: {problem}" if proof is None else "")
+
+    @classmethod
+    def _parse_proof(cls, document: object) -> tuple[HiddenTestsProof | None, str]:
+        """The proof in `document`, or `None` and the first missing or mistyped field (§8)."""
+        if not isinstance(document, dict):
+            return None, "the proof is not a JSON object"
+        content_digest = document.get("content_digest")
+        if not isinstance(content_digest, str) or not content_digest:
+            return None, "'content_digest' is missing or is not a non-empty string"
+        runner = document.get("runner")
+        if not isinstance(runner, str) or not runner:
+            return None, "'runner' is missing or is not a non-empty string"
+        nop, nop_problem = cls._parse_trial(document.get(_NOP_TRIAL), _NOP_TRIAL)
+        if nop is None:
+            return None, nop_problem
+        oracle, oracle_problem = cls._parse_trial(document.get(_ORACLE_TRIAL), _ORACLE_TRIAL)
+        if oracle is None:
+            return None, oracle_problem
+        return HiddenTestsProof(content_digest=content_digest, runner=runner, nop=nop, oracle=oracle), ""
+
+    @staticmethod
+    def _parse_trial(table: object, trial_name: str) -> tuple[ProofTrial | None, str]:
+        """The trial in `table`, or `None` and the first missing or mistyped field of `trial_name` (§8)."""
+        if not isinstance(table, dict):
+            return None, f"'{trial_name}' is missing or is not an object"
+        status = table.get("status")
+        if status not in _TRIAL_STATUSES:
+            return None, f"'{trial_name}.status' is {status!r}, not one of {list(_TRIAL_STATUSES)}"
+        build_error = table.get("build_error")
+        existing_suite = table.get("existing_suite")
+        if not isinstance(build_error, str) or not isinstance(existing_suite, str):
+            return None, f"'{trial_name}.build_error' or '{trial_name}.existing_suite' is missing or is not a string"
+        tests = table.get("tests")
+        if not isinstance(tests, dict) or not all(isinstance(result, str) for result in tests.values()):
+            return None, f"'{trial_name}.tests' is missing or is not an object of string results"
+        return ProofTrial(status=str(status), build_error=build_error, tests=dict(tests), existing_suite=existing_suite), ""
+
+    @classmethod
+    def _listed_hidden_tests(cls, task_dir: Path) -> list[tuple[str, str]]:
+        """The `(test id, kind)` of each `[[hidden_tests]]` table of `tests.toml`; the id is `<repo_path>::<name>`."""
+        return [
+            (f"{entry.get('repo_path', '')}::{entry.get('name', '')}", str(entry.get("kind", "")))
+            for entry in cls._hidden_test_entries(task_dir)
+        ]
+
+    @classmethod
+    def _nop_trial_refusals(cls, trial: ProofTrial, listed_tests: list[tuple[str, str]], datapoint: str) -> list[VerifyRefusal]:
+        """At the base, each fail-to-pass test does not pass, and each pass-to-pass test and the existing suite pass."""
+        refusals = [cls._nop_test_refusal(trial, test_id, kind, datapoint) for test_id, kind in listed_tests]
+        if trial.existing_suite != _RESULT_PASSED:
+            refusals.append(cls._existing_suite_refusal(_NOP_TRIAL, trial.existing_suite, datapoint))
+        return [refusal for refusal in refusals if refusal is not None]
+
+    @classmethod
+    def _nop_test_refusal(cls, trial: ProofTrial, test_id: str, kind: str, datapoint: str) -> VerifyRefusal | None:
+        """The failure of one listed test in the nop trial, or `None` when it obeys its rule."""
+        result = trial.tests.get(test_id)
+        if result is None:
+            return cls._missing_result_refusal(_NOP_TRIAL, test_id, datapoint)
+        if kind == _FAIL_TO_PASS and result == _RESULT_PASSED:
+            return cls._hidden_tests_failure(
+                datapoint,
+                f"{test_id!r} passes at the base (rule: a fail_to_pass test does not pass in the nop trial)",
+                f"the test does not observe the bug — change it or record it as pass_to_pass with `annotate`, {_RERUN_TRIALS}",
+            )
+        if kind == _PASS_TO_PASS and result != _RESULT_PASSED:
+            return cls._hidden_tests_failure(
+                datapoint,
+                f"{test_id!r} is {result!r} at the base (rule: a pass_to_pass test passes in the nop trial)",
+                f"the test does not hold before the fix — change it or record it as fail_to_pass via `annotate`, {_RERUN_TRIALS}",
+            )
+        return None
+
+    @classmethod
+    def _oracle_trial_refusals(
+        cls, trial: ProofTrial, listed_tests: list[tuple[str, str]], datapoint: str
+    ) -> list[VerifyRefusal]:
+        """With the fix, each listed test and the existing suite pass."""
+        refusals = [cls._oracle_test_refusal(trial, test_id, datapoint) for test_id, _ in listed_tests]
+        if trial.existing_suite != _RESULT_PASSED:
+            refusals.append(cls._existing_suite_refusal(_ORACLE_TRIAL, trial.existing_suite, datapoint))
+        return [refusal for refusal in refusals if refusal is not None]
+
+    @classmethod
+    def _oracle_test_refusal(cls, trial: ProofTrial, test_id: str, datapoint: str) -> VerifyRefusal | None:
+        """The failure of one listed test in the oracle trial, or `None` when it passes."""
+        result = trial.tests.get(test_id)
+        if result is None:
+            return cls._missing_result_refusal(_ORACLE_TRIAL, test_id, datapoint)
+        if result == _RESULT_PASSED:
+            return None
+        return cls._hidden_tests_failure(
+            datapoint,
+            f"{test_id!r} is {result!r} with the fix (rule: every listed test passes in the oracle trial)",
+            f"the test does not pass with the fix — change it or the environment recipe with `annotate`, {_RERUN_TRIALS}",
+        )
+
+    @classmethod
+    def _missing_result_refusal(cls, trial_name: str, test_id: str, datapoint: str) -> VerifyRefusal:
+        """A listed test that the proof gives no result for: a proof cannot pass a test by leaving it out."""
+        return cls._hidden_tests_failure(
+            datapoint,
+            f"{test_id!r} has no result in the {trial_name} trial",
+            f"check that the runner reports every test id of {_HIDDEN_TESTS_SPEC_RELPATH}, then run the trials again",
+        )
+
+    @classmethod
+    def _existing_suite_refusal(cls, trial_name: str, result: str, datapoint: str) -> VerifyRefusal:
+        """The repository's own suite did not pass in `trial_name` (US-5: a base whose suite fails is not usable)."""
+        return cls._hidden_tests_failure(
+            datapoint,
+            f"the existing suite is {result!r} in the {trial_name} trial (rule: the existing suite passes)",
+            f"fix the environment recipe with `annotate` (pin dependencies to merge_date), {_RERUN_TRIALS}",
+        )
+
+    @classmethod
+    def _base_does_not_build(cls, trial_name: str, trial: ProofTrial, datapoint: str) -> VerifyRefusal:
+        """One `base-does-not-build` failure: the trial's environment did not build, at the step named."""
+        return cls._fail(
+            "base-does-not-build",
+            datapoint,
+            f"{trial_name} trial: {trial.build_error}",
+            f"fix the environment recipe with `annotate` (pin dependencies to merge_date), {_RERUN_TRIALS}",
+        )
+
+    @classmethod
+    def _hidden_tests_failure(cls, datapoint: str, offending: str, next_: str) -> VerifyRefusal:
+        """One `hidden-tests-proven` failure (exit 4)."""
+        return cls._fail("hidden-tests-proven", datapoint, offending, next_)
+
+    @classmethod
+    def _no_valid_proof(cls, datapoint: str, reason: str) -> VerifyRefusal:
+        """`hidden-tests-proven` unresolved (exit 5), never a pass: there is no valid proof, for `reason`."""
+        return cls._unresolved("hidden-tests-proven", datapoint, f"{_NO_VALID_PROOF} ({reason})", _RUN_THE_RUNNER)
 
     # ───────────────────────────── instruction names the fix (FR-26) ─────────────────────────────
 

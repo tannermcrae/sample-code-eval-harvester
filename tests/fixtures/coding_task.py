@@ -9,14 +9,15 @@ base commit of the fixture's clone.
 
 from __future__ import annotations
 
+import json
 import subprocess  # nosec B404  # one fixed `git diff` argv, never a shell string
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, cast
 
 from eval_harvest.gitcmd import GIT_EXECUTABLE
 from eval_harvest.harbor import FixHarvestFields, FixTaskOrigin, Harbor
-from eval_harvest.tomlw import emit_document
+from eval_harvest.tomlw import TomlValue, emit_document
 from eval_harvest.verify import HIDDEN_TESTS_RELDIR, ORACLE_PATCH_RELPATH, REFERENCE_PATCH_RELPATH
 from fixtures.repo_builder import RepoBuilder
 
@@ -36,6 +37,9 @@ ISSUE_URL: Final = f"https://github.com/{_REPO}/issues/{ISSUE_NUMBER}"
 #: The one hidden fail-to-pass test, at its repository path.
 HIDDEN_TEST_REPO_PATH: Final = "tests/test_scan.py"
 HIDDEN_TEST_NAME: Final = "test_scan_sums_items"
+HIDDEN_TEST_ID: Final = f"{HIDDEN_TEST_REPO_PATH}::{HIDDEN_TEST_NAME}"
+#: The `content_digest` the fixture records in `task.toml`, and a valid proof repeats.
+CONTENT_DIGEST: Final = "sha256:" + "0" * 63 + "1"
 HIDDEN_TEST_SOURCE: Final = "from code import scan\n\n\ndef test_scan_sums_items():\n    assert scan([1, 2, 3]) == 6\n"
 
 _TESTS_TOML: Final = f"""test_command = "python -m pytest --junitxml=/logs/verifier/junit.xml"
@@ -80,6 +84,11 @@ class CodingTaskFixture:
     merge_sha: str
 
 
+def default_proof_path(fixture: CodingTaskFixture) -> Path:
+    """`<dataset>/proofs/<task-dir>.json`: where `verify <dataset>/tasks/<task-dir>` looks for the proof."""
+    return fixture.task_dir.parent.parent / "proofs" / f"{fixture.task_dir.name}.json"
+
+
 class CodingTaskBuilder:
     """Writes one correct coding task directory from the squash-merge fixture. Holds no state."""
 
@@ -88,7 +97,7 @@ class CodingTaskBuilder:
         """Build the squash-merge fixture under `root` and write a correct coding task for its fix.
 
         The oracle fix is `git diff <base> <round 2 tip>`; `round2_tip` stands in for the merge commit.
-        `verify` on the result fails nothing: only `hidden-tests-proven` and `git-channel-absence` are
+        `verify` on the result fails nothing: only `hidden-tests-proven` (no proof yet) and `git-channel-absence` are
         unresolved.
         """
         pull_request = RepoBuilder.build_squash_merged_pull_request(root)
@@ -136,7 +145,38 @@ class CodingTaskBuilder:
             harvest=FixHarvestFields(kind="fix", task_type="investigate-and-fix", fail_to_pass=1, pass_to_pass=0, overrides=()),
             artifacts=({"source": "/work/repo", "exclude": [".git"]},),
         )
+        # The digest `emit` records; `verify` compares a proof's digest with it (FR-35). A fixed value,
+        # because `verify` never recomputes the digest (the same trust model as `dataset`).
+        metadata = cast("dict[str, TomlValue]", document["metadata"])
+        harvest = cast("dict[str, TomlValue]", metadata["harvest"])
+        harvest["content_digest"] = CONTENT_DIGEST
         return emit_document(document)
+
+    @staticmethod
+    def valid_proof() -> dict[str, Any]:
+        """A proof (§8) that obeys every FR-35 rule for the fixture task, with the fixture's `content_digest`.
+
+        `Any` because it is a JSON document the tests break by reaching into nested tables; a precise
+        recursive type would make every break a cast.
+        """
+        return {
+            "content_digest": CONTENT_DIGEST,
+            "runner": "fixture-runner 0.0.1",
+            "nop": {"status": "completed", "build_error": "", "tests": {HIDDEN_TEST_ID: "failed"}, "existing_suite": "passed"},
+            "oracle": {"status": "completed", "build_error": "", "tests": {HIDDEN_TEST_ID: "passed"}, "existing_suite": "passed"},
+        }
+
+    @classmethod
+    def write_valid_proof(cls, fixture: CodingTaskFixture, path: Path | None = None) -> Path:
+        """Write `valid_proof()` to `path` (default: the dataset's `proofs/<task-dir>.json`) and return the path."""
+        target = path if path is not None else default_proof_path(fixture)
+        cls.write_proof(target, cls.valid_proof())
+        return target
+
+    @classmethod
+    def write_proof(cls, path: Path, proof: dict[str, Any]) -> None:
+        """Write `proof` to `path` as JSON."""
+        cls._write_bytes(path, (json.dumps(proof, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
     @staticmethod
     def _diff(clone: Path, base_sha: str, tip_sha: str) -> bytes:

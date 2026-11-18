@@ -104,6 +104,79 @@ GUARDS: Final[tuple[GuardSpec, ...]] = (
         invariant="the rubric is present, non-empty, and version-pinned",
         test="test_guard_preconditions",
     ),
+    # The coding-datapoint guards (coding-eval-harvest, US-6). `hidden-tests-proven` has three guards,
+    # one per way it must not pass: a broken rule, a stale proof, and no proof at all.
+    GuardSpec(
+        guard_id="coding-content-leak",
+        check="answer-present",
+        scenario="US-6",
+        invariant="the issue number, PR and issue URLs, merge SHA, and hidden test names are absent "
+        "from agent-visible files of a coding task",
+        test="test_guard_coding_content_leak",
+    ),
+    GuardSpec(
+        guard_id="instruction-names-fix",
+        check="instruction-names-fix",
+        scenario="US-6",
+        invariant="the instruction names no path or symbol that the oracle patch changes",
+        test="test_guard_instruction_names_fix",
+    ),
+    GuardSpec(
+        guard_id="instruction-scan-control-token",
+        check="scan-did-not-run",
+        scenario="US-6",
+        invariant="the planted instruction control token is present in the scanned instruction",
+        test="test_guard_instruction_scan_control_token",
+    ),
+    GuardSpec(
+        guard_id="instruction-uniform",
+        check="instruction-not-uniform",
+        scenario="US-6",
+        invariant="the instruction outside its two slots is the canonical template",
+        test="test_guard_instruction_uniform",
+    ),
+    GuardSpec(
+        guard_id="answer-placement",
+        check="answer-misplaced",
+        scenario="US-6",
+        invariant="the oracle patch and the hidden tests are only in solution/ and tests/",
+        test="test_guard_answer_placement",
+    ),
+    GuardSpec(
+        guard_id="spec-coherent",
+        check="spec-incoherent",
+        scenario="US-6",
+        invariant="the task has a validation story with a case, a fail_to_pass criterion, and a fail_to_pass test with a file",
+        test="test_guard_spec_coherent",
+    ),
+    GuardSpec(
+        guard_id="hidden-tests-proven-rule",
+        check="hidden-tests-proven",
+        scenario="US-6",
+        invariant="in the proof, each fail_to_pass test fails at nop and each listed test passes at oracle",
+        test="test_guard_hidden_tests_proven_rule",
+    ),
+    GuardSpec(
+        guard_id="hidden-tests-proven-stale",
+        check="hidden-tests-proven",
+        scenario="US-6",
+        invariant="a proof whose content_digest is not the task digest never passes",
+        test="test_guard_hidden_tests_proven_stale",
+    ),
+    GuardSpec(
+        guard_id="hidden-tests-proven-no-proof",
+        check="hidden-tests-proven",
+        scenario="US-6",
+        invariant="without a proof the check is unresolved, never passed",
+        test="test_guard_hidden_tests_proven_no_proof",
+    ),
+    GuardSpec(
+        guard_id="base-does-not-build",
+        check="base-does-not-build",
+        scenario="US-6",
+        invariant="a proof trial with a build failure fails the datapoint",
+        test="test_guard_base_does_not_build",
+    ),
 )
 
 #: The report's path relative to the repository root. ``test_guards.py`` reads the committed file and

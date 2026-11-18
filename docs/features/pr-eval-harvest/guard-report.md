@@ -17,3 +17,13 @@ complete and that every test below asserts both the red (violation) and green (c
 | `patch-does-not-apply` | S-12 | change.patch applies cleanly at the base commit | `test_guard_preconditions` |
 | `finding-line-absent` | S-12 | every oracle finding references a line the change touches | `test_guard_preconditions` |
 | `rubric-incoherent` | S-12 | the rubric is present, non-empty, and version-pinned | `test_guard_preconditions` |
+| `answer-present` | US-6 | the issue number, PR and issue URLs, merge SHA, and hidden test names are absent from agent-visible files of a coding task | `test_guard_coding_content_leak` |
+| `instruction-names-fix` | US-6 | the instruction names no path or symbol that the oracle patch changes | `test_guard_instruction_names_fix` |
+| `scan-did-not-run` | US-6 | the planted instruction control token is present in the scanned instruction | `test_guard_instruction_scan_control_token` |
+| `instruction-not-uniform` | US-6 | the instruction outside its two slots is the canonical template | `test_guard_instruction_uniform` |
+| `answer-misplaced` | US-6 | the oracle patch and the hidden tests are only in solution/ and tests/ | `test_guard_answer_placement` |
+| `spec-incoherent` | US-6 | the task has a validation story with a case, a fail_to_pass criterion, and a fail_to_pass test with a file | `test_guard_spec_coherent` |
+| `hidden-tests-proven` | US-6 | in the proof, each fail_to_pass test fails at nop and each listed test passes at oracle | `test_guard_hidden_tests_proven_rule` |
+| `hidden-tests-proven` | US-6 | a proof whose content_digest is not the task digest never passes | `test_guard_hidden_tests_proven_stale` |
+| `hidden-tests-proven` | US-6 | without a proof the check is unresolved, never passed | `test_guard_hidden_tests_proven_no_proof` |
+| `base-does-not-build` | US-6 | a proof trial with a build failure fails the datapoint | `test_guard_base_does_not_build` |

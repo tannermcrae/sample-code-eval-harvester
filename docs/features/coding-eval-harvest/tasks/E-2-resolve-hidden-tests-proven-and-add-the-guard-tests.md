@@ -4,7 +4,7 @@ title: "[Verify] Resolve hidden-tests-proven and add the guard tests"
 summary: "Read the runner's proof file in verify, then break each new coding check on purpose and watch it fail."
 feature: coding-eval-harvest
 workstream: Verify
-status: in-progress
+status: done
 complexity: M
 merges: [E-4, E-5]
 implements: [FR-23, FR-25, FR-26, FR-27, FR-28, FR-29, FR-35, NFR-8]
@@ -215,18 +215,18 @@ Manual checks:
 
 ## Acceptance Criteria
 
-- [ ] A valid proof makes `hidden-tests-proven` pass.
-- [ ] Each rule failure names the test and the rule. A build failure gives `base-does-not-build` with the step.
-- [ ] A missing, malformed, or stale proof gives unresolved (exit 5), never pass.
-- [ ] `verify` finds the proof at the default path, and `--proof` overrides it.
-- [ ] `man/eval-harvest-coding.md` exists and contains the proof schema, the test id form, and the three results.
-- [ ] `Verify.check_hidden_tests_proven` is public, so F-1 can call it.
-- [ ] `GUARDS` and `_CANONICAL_GUARD_IDS` contain the ten coding guard ids.
-- [ ] Each of the ten guard tests has a `# RED:` and a `# GREEN:` assertion, and both pass.
-- [ ] `docs/features/pr-eval-harvest/guard-report.md` lists the ten coding guards and equals `render_guard_report()`.
-- [ ] Each check was broken by hand one time, its guard test went red, and the change was reverted. The PR description lists them.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9).
+- [x] A valid proof makes `hidden-tests-proven` pass.
+- [x] Each rule failure names the test and the rule. A build failure gives `base-does-not-build` with the step.
+- [x] A missing, malformed, or stale proof gives unresolved (exit 5), never pass.
+- [x] `verify` finds the proof at the default path, and `--proof` overrides it.
+- [x] `man/eval-harvest-coding.md` exists and contains the proof schema, the test id form, and the three results.
+- [x] `Verify.check_hidden_tests_proven` is public, so F-1 can call it.
+- [x] `GUARDS` and `_CANONICAL_GUARD_IDS` contain the ten coding guard ids.
+- [x] Each of the ten guard tests has a `# RED:` and a `# GREEN:` assertion, and both pass.
+- [x] `docs/features/pr-eval-harvest/guard-report.md` lists the ten coding guards and equals `render_guard_report()`.
+- [x] Each check was broken by hand one time, its guard test went red, and the change was reverted. The PR description lists them.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9).
 
 ## Out Of Scope
 
@@ -256,3 +256,36 @@ Manual checks:
 
 **Blocked by:** [D-1](D-1-write-the-coding-task-templates-and-the-reward-stack.md), [E-1](E-1-add-the-static-coding-checks-to-verify.md)
 **Blocks:** [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `hidden-tests-proven-guards-e-2`  ·  **Commit:** the `[E-2]` commit on `main`
+
+**What was implemented:** `verify` resolves `hidden-tests-proven` from a runner's proof file (`<dataset>/proofs/<task-dir>.json` by default, or `--proof <file>`). It applies the FR-35 rules with test ids from `tests/verify/tests.toml`, and gives `base-does-not-build` for a trial that did not build. A missing, malformed, mistyped, or stale proof is unresolved (exit 5). Ten coding guards were added to the guard registry, each with a red and a green assertion, and the guard report was regenerated.
+
+**Files changed:**
+- `src/eval_harvest/verify.py` — `proof_path` keyword on `verify_task`; public `check_hidden_tests_proven`; `ProofTrial` and `HiddenTestsProof` data classes; parse, digest, and rule helpers. `_check_hidden_tests_unresolved` deleted.
+- `src/eval_harvest/cli.py` — `--proof` flag; `_default_proof_path` (only for a task under `tasks/`).
+- `man/eval-harvest-coding.md` — new: NAME and PROOF FILE (schema, field rules, test id form, rules, three results).
+- `man/eval-harvest-verify.md` — `[--proof <file>]` added to SYNOPSIS.
+- `tests/fixtures/coding_task.py` — the fixture records a fixed `content_digest`; `valid_proof`, `write_valid_proof`, `write_proof`, `default_proof_path`, `HIDDEN_TEST_ID`.
+- `tests/integration/test_verify_coding.py` — 17 Part 1 tests (the 12 named ones, plus p2p-at-nop, unlisted-test-ignored, five mistyped-field cases, and task-outside-`tasks/` reads no proof).
+- `tests/guard_registry.py`, `tests/integration/test_guards.py` — ten coding `GuardSpec`s, ten canonical ids, ten guard tests.
+- `docs/features/pr-eval-harvest/guard-report.md` — regenerated with `uv run scripts/gen_guard_report.py`.
+
+**Acceptance criteria:**
+- Valid proof passes: `test_valid_proof_passes`, `test_guard_hidden_tests_proven_rule` (green). Manual check 1: `passed` has `hidden-tests-proven`, and only `git-channel-absence` is unresolved.
+- Rule failures name the test and the rule; a build failure names the step: `test_f2p_passing_at_nop_fails_by_name`, `test_p2p_failing_at_*`, `test_existing_suite_failing_at_nop_fails`, `test_missing_test_result_fails`, `test_build_failed_gives_base_does_not_build`.
+- Missing, malformed, or stale proof is unresolved (exit 5): `test_no_proof_is_unresolved_exit_5`, `test_malformed_proof_is_unresolved`, `test_mistyped_proof_field_is_unresolved`, `test_stale_digest_is_unresolved`.
+- Default path and `--proof`: `test_cli_default_proof_path`, `test_cli_proof_flag_overrides_default`, `test_task_outside_tasks_dir_reads_no_proof`.
+- Man page: `man/eval-harvest-coding.md` exists.
+- `check_hidden_tests_proven` is public.
+- Registry and canonical ids have 19 ids, and each new test has `# RED:` and `# GREEN:`: `test_guard_report_covers_every_us7_check`.
+- Guard report equals `render_guard_report()`: the same test.
+- Hand breaks (step 16), each run as a real pytest failure and reverted: content-leak (merge SHA dropped from the tokens), instruction-names-fix (no refusals returned), the instruction control token (`scan-did-not-run` suppressed), instruction-uniform, answer-placement, and the rubric spec (each made to return `[]`), the f2p-at-nop rule, the digest comparison, the no-proof refusal, and the `base-does-not-build` early return. Part 1 checks broken the same way: missing result, existing suite, p2p at oracle, p2p at nop, parse-error text, default proof path, and the `--proof` flag. All went red. Note: my first break loop passed a bad pytest flag (`-p no:xdist`), so pytest exited with a usage error that looked like red. I found this and ran the loop again with a real `1 failed` match.
+- How To Verify: all commands pass. `mise run check`: 835 passed, 86 skipped. Lint, bandit, and strict mypy pass. `uv build` passes. `mise run test-e2e`: 14 passed.
+- No regressions: full suite green.
+
+**Deviations from the task:** (1) The fixture `task.toml` had no `content_digest`, so the fixture now records a fixed one, as `emit` does, for `write_valid_proof` to repeat. (2) `write_valid_proof(fixture, path)` makes `path` optional (default: the dataset's proof path) and returns it. (3) `man/eval-harvest-verify.md` SYNOPSIS gets `[--proof <file>]`, so the page matches `--help`. (4) When a trial build fails, only the `base-does-not-build` failures are reported. The test rules are skipped, because test results from an unbuilt trial mean nothing. (5) Line numbers cited in the task had drifted (`verify_task`, `add_verify_arguments`, `handle_verify`). The code they point to was unchanged.
+
+**Follow-ups noticed but not done:** the `next` texts for the p2p and existing-suite failures are not given in the task; they were written in the style of the given ones. `uv run pytest` reports CPython 3.14 in tracebacks, while CLAUDE.md pins 3.12. This is worth a look, and it is outside this task.

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixtures.coding_task import HIDDEN_TEST_ID, CodingTaskBuilder
 from fixtures.repo_builder import RepoBuilder
 from guard_registry import GUARDS, REPORT_RELATIVE_PATH, render_guard_report, repo_root
 
@@ -40,7 +41,7 @@ from eval_harvest.emit import Emit, EmitRefusalError
 from eval_harvest.forge import Forge
 from eval_harvest.riskmap import RiskMap
 from eval_harvest.tomlw import emit_document
-from eval_harvest.verify import CHANGE_PATCH_RELPATH, Verify, VerifyRefusal, VerifyReport
+from eval_harvest.verify import CHANGE_PATCH_RELPATH, ORACLE_PATCH_RELPATH, Verify, VerifyRefusal, VerifyReport
 
 #: A risk map marking the fixture's only file high, so `risk_structural` is `high`; paired with a
 #: `low` classification it makes the two disagree (S-9), and with a `high` one it aligns them.
@@ -59,6 +60,16 @@ _CANONICAL_GUARD_IDS = frozenset(
         "precondition-patch",
         "precondition-finding-line",
         "precondition-rubric",
+        "coding-content-leak",
+        "instruction-names-fix",
+        "instruction-scan-control-token",
+        "instruction-uniform",
+        "answer-placement",
+        "spec-coherent",
+        "hidden-tests-proven-rule",
+        "hidden-tests-proven-stale",
+        "hidden-tests-proven-no-proof",
+        "base-does-not-build",
     }
 )
 
@@ -363,6 +374,195 @@ def test_guard_preconditions(tmp_path: Path) -> None:
     rubric_broken = _copy_task(task_dir, tmp_path / "broken-rubric")
     (rubric_broken / "tests" / "rubric.md").write_text("", encoding="utf-8")
     assert _has_refusal(Verify.verify_task(rubric_broken, clone=clone), "rubric-incoherent"), "blank rubric must fail"
+
+
+# ───────────────────────────── coding-datapoint guards (coding-eval-harvest US-6, NFR-8) ─────────────────────────────
+
+
+def _coding_checks_fired(report: VerifyReport) -> list[str]:
+    """The check names of every refusal of a coding report, failures and unresolved alike."""
+    return [refusal.check for refusal in _refusals(report)]
+
+
+def _append_to_instruction(task_dir: Path, text: str) -> None:
+    """Append `text` to the task's `instruction.md`."""
+    instruction = task_dir / "instruction.md"
+    instruction.write_text(instruction.read_text(encoding="utf-8") + text, encoding="utf-8")
+
+
+def test_guard_coding_content_leak(tmp_path: Path) -> None:
+    """The full merge SHA in a coding instruction fires `answer-present`; the clean task does not (FR-25)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the merge commit lets the agent look the fix up.
+    leaked = _copy_task(fixture.task_dir, tmp_path / "leaked")
+    _append_to_instruction(leaked, f"\nThe fix is in {fixture.merge_sha}.\n")
+    red = Verify.verify_task(leaked, clone=fixture.clone)
+    assert fixture.merge_sha in _refusal(red, "answer-present").offending, "the merge SHA leak did not fire answer-present"
+
+    # GREEN: the clean coding task carries none of the coding tokens.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "answer-present" not in _coding_checks_fired(green)
+    assert "content-absence" in green.passed
+
+
+def test_guard_instruction_names_fix(tmp_path: Path) -> None:
+    """A changed path in the instruction fires `instruction-names-fix`; the clean instruction passes (FR-26)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the instruction names `code.py`, the file the oracle patch changes.
+    named = _copy_task(fixture.task_dir, tmp_path / "named")
+    CodingTaskBuilder.write_instruction(named, task_text="The sum in code.py raises an IndexError on the last element.")
+    red = Verify.verify_task(named, clone=fixture.clone)
+    assert "'code.py'" in _refusal(red, "instruction-names-fix").offending, "a changed path in the instruction must fail"
+
+    # GREEN: the default instruction names the symptom only.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "instruction-names-fix" in green.passed
+
+
+def test_guard_instruction_scan_control_token(tmp_path: Path) -> None:
+    """Without the instruction's planted control token, the instruction scan refuses `scan-did-not-run` (NFR-8)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the instruction plant is off, the content-scan plant stays on, so only the instruction scan can fire.
+    red = Verify.verify_task(
+        fixture.task_dir, clone=fixture.clone, plant_control_token=True, plant_instruction_control_token=False
+    )
+    assert _coding_checks_fired(red).count("scan-did-not-run") == 1, "a scan that read nothing must refuse"
+    assert "content-absence" in red.passed, "the red must come from the instruction scan alone"
+    assert "instruction-names-fix" not in red.passed
+
+    # GREEN: with the plant, the instruction scan proves it ran and refuses nothing.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "scan-did-not-run" not in _coding_checks_fired(green)
+    assert "instruction-names-fix" in green.passed
+
+
+def test_guard_instruction_uniform(tmp_path: Path) -> None:
+    """One changed word in the general instructions fires `instruction-not-uniform`; the template passes (FR-27)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the general instructions drift by one word.
+    drifted = _copy_task(fixture.task_dir, tmp_path / "drifted")
+    instruction = (drifted / "instruction.md").read_text(encoding="utf-8")
+    assert "act autonomously" in instruction
+    (drifted / "instruction.md").write_text(instruction.replace("act autonomously", "act independently"), encoding="utf-8")
+    red = Verify.verify_task(drifted, clone=fixture.clone)
+    assert "independently" in _refusal(red, "instruction-not-uniform").offending, "instruction drift must fail"
+
+    # GREEN: the instruction filled from the template is uniform.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "instruction-uniform" in green.passed
+
+
+def test_guard_answer_placement(tmp_path: Path) -> None:
+    """A copy of the oracle patch in the build context fires `answer-misplaced`; the clean task passes (FR-28)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the fix sits in environment/, where the agent's image is built from.
+    misplaced = _copy_task(fixture.task_dir, tmp_path / "misplaced")
+    shutil.copyfile(misplaced / ORACLE_PATCH_RELPATH, misplaced / "environment" / "fix.diff")
+    red = Verify.verify_task(misplaced, clone=fixture.clone)
+    assert "environment/fix.diff" in _refusal(red, "answer-misplaced").offending, "the answer in environment/ must fail"
+
+    # GREEN: the answer is only in solution/ and tests/.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "answer-placement" in green.passed
+
+
+def test_guard_spec_coherent(tmp_path: Path) -> None:
+    """A rubric with no fail_to_pass criterion fires `spec-incoherent`; the clean task passes (FR-29)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: the rubric keeps no fail_to_pass criterion, so the judge scores nothing that the fix proves.
+    incoherent = _copy_task(fixture.task_dir, tmp_path / "incoherent")
+    rubric = incoherent / "tests" / "judge" / "rubric.toml"
+    text = rubric.read_text(encoding="utf-8")
+    assert 'kind = "fail_to_pass"' in text
+    rubric.write_text(text.replace('kind = "fail_to_pass"', 'kind = "pass_to_pass"'), encoding="utf-8")
+    red = Verify.verify_task(incoherent, clone=fixture.clone)
+    assert "rubric.toml" in _refusal(red, "spec-incoherent").offending, "a rubric with no fail_to_pass criterion must fail"
+
+    # GREEN: the three spec files give the reward stack something to score.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "spec-coherent" in green.passed
+
+
+def test_guard_hidden_tests_proven_rule(tmp_path: Path) -> None:
+    """A fail-to-pass test that passes at nop fires a `hidden-tests-proven` failure naming it; a valid proof passes (FR-35)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+    valid_path = CodingTaskBuilder.write_valid_proof(fixture)
+
+    # RED: the fail-to-pass test already passes at the base, so it does not observe the bug.
+    broken = CodingTaskBuilder.valid_proof()
+    broken["nop"]["tests"][HIDDEN_TEST_ID] = "passed"
+    broken_path = tmp_path / "broken-proof.json"
+    CodingTaskBuilder.write_proof(broken_path, broken)
+    red = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=broken_path)
+    refusal = _refusal(red, "hidden-tests-proven")
+    assert not refusal.unresolved, "a broken rule is a failure, not unresolved"
+    assert HIDDEN_TEST_ID in refusal.offending, "the failure must name the test"
+
+    # GREEN: the valid proof obeys every rule.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=valid_path)
+    assert "hidden-tests-proven" in green.passed
+
+
+def test_guard_hidden_tests_proven_stale(tmp_path: Path) -> None:
+    """A proof with one changed digest character is unresolved and never passed; the valid proof passes (FR-35)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+    valid_path = CodingTaskBuilder.write_valid_proof(fixture)
+
+    # RED: the proof is of another version of the task.
+    stale = CodingTaskBuilder.valid_proof()
+    digest = str(stale["content_digest"])
+    stale["content_digest"] = digest[:-1] + ("2" if digest[-1] != "2" else "3")
+    stale_path = tmp_path / "stale-proof.json"
+    CodingTaskBuilder.write_proof(stale_path, stale)
+    red = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=stale_path)
+    assert "hidden-tests-proven" in [refusal.check for refusal in red.unresolved], "a stale proof must be unresolved"
+    assert "hidden-tests-proven" not in red.passed, "a stale proof must never pass"
+
+    # GREEN: the proof with the task digest passes.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=valid_path)
+    assert "hidden-tests-proven" in green.passed
+
+
+def test_guard_hidden_tests_proven_no_proof(tmp_path: Path) -> None:
+    """Without a proof `hidden-tests-proven` is unresolved and never passed; a valid proof passes (NFR-8)."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+
+    # RED: no proof, so nothing proves the hidden tests.
+    red = Verify.verify_task(fixture.task_dir, clone=fixture.clone)
+    assert "hidden-tests-proven" in [refusal.check for refusal in red.unresolved], "no proof must be unresolved"
+    assert "hidden-tests-proven" not in red.passed, "the check must never pass without a proof"
+
+    # GREEN: a valid proof proves them.
+    valid_path = CodingTaskBuilder.write_valid_proof(fixture)
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=valid_path)
+    assert "hidden-tests-proven" in green.passed
+
+
+def test_guard_base_does_not_build(tmp_path: Path) -> None:
+    """A nop trial whose build failed fires `base-does-not-build` with the step; the valid proof passes."""
+    fixture = CodingTaskBuilder.build(tmp_path)
+    valid_path = CodingTaskBuilder.write_valid_proof(fixture)
+
+    # RED: the base environment did not build at `RUN uv pip sync`.
+    broken = CodingTaskBuilder.valid_proof()
+    broken["nop"]["status"] = "build-failed"
+    broken["nop"]["build_error"] = "RUN uv pip sync"
+    broken_path = tmp_path / "build-failed-proof.json"
+    CodingTaskBuilder.write_proof(broken_path, broken)
+    red = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=broken_path)
+    assert "RUN uv pip sync" in _refusal(red, "base-does-not-build").offending, "the build failure must name the step"
+    assert "hidden-tests-proven" not in red.passed
+
+    # GREEN: the valid proof built both trials.
+    green = Verify.verify_task(fixture.task_dir, clone=fixture.clone, proof_path=valid_path)
+    assert "base-does-not-build" not in _coding_checks_fired(green)
+    assert "hidden-tests-proven" in green.passed
 
 
 # ───────────────────────────── the coverage & report guard (FR-37) ─────────────────────────────

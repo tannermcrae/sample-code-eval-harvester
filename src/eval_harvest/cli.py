@@ -697,11 +697,13 @@ class Cli:
 
     @staticmethod
     def add_verify_arguments(verify_parser: argparse.ArgumentParser) -> None:
-        """Register ``verify <task-dir> [--clone <dir>]`` (tech plan §9).
+        """Register ``verify <task-dir> [--clone <dir>] [--proof <file>]`` (tech plan §9).
 
         ``verify`` is offline: it reads the emitted task directory and, for the base-commit and
         patch-apply checks, the local clone's objects — no forge call, no ``git fetch`` (NFR-2).
         ``--clone`` is optional; without it the base/patch checks report unresolved rather than run.
+        ``--proof`` names a coding task's runner proof (FR-35); without it ``handle_verify`` looks at
+        ``<dataset>/proofs/<task-dir>.json``.
         """
         verify_parser.add_argument(
             "task_dir", type=Path, metavar="<task-dir>", help="path to the emitted task directory to verify"
@@ -712,6 +714,13 @@ class Cli:
             default=None,
             metavar="<dir>",
             help="local clone whose objects hold the base commit (for the base-exists and patch-applies checks)",
+        )
+        verify_parser.add_argument(
+            "--proof",
+            type=Path,
+            default=None,
+            metavar="<file>",
+            help="proof file from a runner (default: <dataset>/proofs/<task-dir>.json)",
         )
 
     @staticmethod
@@ -2478,9 +2487,22 @@ class Cli:
             print(f"eval-harvest verify: {task_dir} is not a directory (pass an emitted task directory)", file=sys.stderr)
             return ExitCode.USAGE
 
-        report = Verify.verify_task(task_dir, clone=clone)
+        proof_path: Path | None = arguments.proof if arguments.proof is not None else cls._default_proof_path(task_dir)
+        report = Verify.verify_task(task_dir, clone=clone, proof_path=proof_path)
         cls._report_verify(report, json_mode=json_mode)
         return report.exit_code
+
+    @staticmethod
+    def _default_proof_path(task_dir: Path) -> Path | None:
+        """``<dataset>/proofs/<task-dir>.json`` for a task under ``<dataset>/tasks/``, else ``None`` (FR-35).
+
+        The rule lives in the CLI, not in ``verify_task``: ``emit`` verifies a temporary directory
+        outside ``tasks/``, which must never pick up a proof by accident.
+        """
+        resolved = task_dir.resolve()
+        if resolved.parent.name != "tasks":
+            return None
+        return resolved.parent.parent / "proofs" / f"{resolved.name}.json"
 
     @staticmethod
     def _report_verify(report: VerifyReport, *, json_mode: bool) -> None:

@@ -8,7 +8,7 @@ agent can read.
 ## SYNOPSIS
 
 ```
-eval-harvest verify <task-dir> [--clone <dir>] [--json]
+eval-harvest verify <task-dir> [--clone <dir>] [--proof <file>] [--json]
 ```
 
 ## DESCRIPTION

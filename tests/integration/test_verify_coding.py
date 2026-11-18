@@ -10,14 +10,17 @@ does not exist yet.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fixtures.coding_task import (
     FIX_TEMPLATE,
+    HIDDEN_TEST_ID,
     HIDDEN_TEST_NAME,
     HIDDEN_TEST_REPO_PATH,
     ISSUE_NUMBER,
@@ -25,6 +28,7 @@ from fixtures.coding_task import (
     PR_URL,
     CodingTaskBuilder,
     CodingTaskFixture,
+    default_proof_path,
 )
 
 from eval_harvest.cli import Cli, ExitCode
@@ -529,3 +533,245 @@ def test_each_coding_failure_has_four_actionable_fields(coding_task: CodingTaskF
         assert refusal.datapoint == f"pr-{datapoint}/fix"
         assert refusal.offending
         assert re.search(r"annotate|emit|remove |\.toml|\.md", refusal.next_), refusal
+
+
+# ───────────────────────────── hidden tests proven by a runner's proof (FR-35, FR-23) ─────────────────────────────
+
+_P2P_TEST_NAME = "test_scan_of_empty_list"
+_P2P_TEST_ID = f"{HIDDEN_TEST_REPO_PATH}::{_P2P_TEST_NAME}"
+
+
+def _verify_with_proof(coding_task: CodingTaskFixture, proof: dict[str, Any]) -> VerifyReport:
+    """Write `proof` to the default proof path and verify the task with it."""
+    path = default_proof_path(coding_task)
+    CodingTaskBuilder.write_proof(path, proof)
+    return Verify.verify_task(coding_task.task_dir, clone=coding_task.clone, proof_path=path)
+
+
+def _add_pass_to_pass_test(task_dir: Path) -> None:
+    """List a second hidden test, of kind pass_to_pass, in the same file as the fail-to-pass test."""
+    spec = task_dir / HIDDEN_TESTS_RELDIR / "tests.toml"
+    entry = (
+        f'\n[[hidden_tests]]\nid = "{_P2P_TEST_ID}"\nrepo_path = "{HIDDEN_TEST_REPO_PATH}"\n'
+        f'name = "{_P2P_TEST_NAME}"\nkind = "pass_to_pass"\n'
+    )
+    spec.write_bytes(spec.read_bytes() + entry.encode("utf-8"))
+
+
+def _hidden_tests_failures(report: VerifyReport) -> list[VerifyRefusal]:
+    """The `hidden-tests-proven` hard failures of `report`."""
+    return [refusal for refusal in report.failures if refusal.check == "hidden-tests-proven"]
+
+
+def test_valid_proof_passes(coding_task: CodingTaskFixture) -> None:
+    """A valid proof puts `hidden-tests-proven` in `passed`; only `git-channel-absence` stays unresolved (FR-35)."""
+    report = _verify_with_proof(coding_task, CodingTaskBuilder.valid_proof())
+    print(report)
+
+    assert "hidden-tests-proven" in report.passed
+    assert report.failures == []
+    assert [refusal.check for refusal in report.unresolved] == ["git-channel-absence"]
+
+
+def test_f2p_passing_at_nop_fails_by_name(coding_task: CodingTaskFixture) -> None:
+    """A fail-to-pass test that passes at the base fails the check and names the test (FR-35)."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["tests"][HIDDEN_TEST_ID] = "passed"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _hidden_tests_failures(report)
+    assert f"{HIDDEN_TEST_ID!r} passes at the base" in refusal.offending
+    assert "fail_to_pass" in refusal.offending
+    assert "does not observe the bug" in refusal.next_
+    assert report.exit_code == ExitCode.VERIFICATION
+
+
+def test_f2p_error_at_nop_counts_as_failing(coding_task: CodingTaskFixture) -> None:
+    """A fail-to-pass test that errors at the base (it imports what the fix adds) obeys the rule."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["tests"][HIDDEN_TEST_ID] = "error"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    assert "hidden-tests-proven" in report.passed
+
+
+def test_p2p_failing_at_oracle_fails_by_name(coding_task: CodingTaskFixture) -> None:
+    """A pass-to-pass test that fails with the fix fails the check and names the test (FR-35)."""
+    _add_pass_to_pass_test(coding_task.task_dir)
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["tests"][_P2P_TEST_ID] = "passed"
+    proof["oracle"]["tests"][_P2P_TEST_ID] = "failed"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _hidden_tests_failures(report)
+    assert _P2P_TEST_ID in refusal.offending
+    assert "with the fix" in refusal.offending
+
+
+def test_p2p_failing_at_nop_fails_by_name(coding_task: CodingTaskFixture) -> None:
+    """A pass-to-pass test that does not pass at the base fails the check and names the test (FR-35)."""
+    _add_pass_to_pass_test(coding_task.task_dir)
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["tests"][_P2P_TEST_ID] = "failed"
+    proof["oracle"]["tests"][_P2P_TEST_ID] = "passed"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _hidden_tests_failures(report)
+    assert _P2P_TEST_ID in refusal.offending
+    assert "at the base" in refusal.offending
+
+
+def test_existing_suite_failing_at_nop_fails(coding_task: CodingTaskFixture) -> None:
+    """A base whose own suite fails is not a usable base (US-5)."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["existing_suite"] = "failed"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _hidden_tests_failures(report)
+    assert "existing suite" in refusal.offending
+    assert "nop trial" in refusal.offending
+
+
+def test_build_failed_gives_base_does_not_build(coding_task: CodingTaskFixture) -> None:
+    """A trial whose environment did not build fails `base-does-not-build` with the failed step."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["status"] = "build-failed"
+    proof["nop"]["build_error"] = "RUN uv pip sync requirements.lock"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = [refusal for refusal in report.failures if refusal.check == "base-does-not-build"]
+    assert refusal.offending == "nop trial: RUN uv pip sync requirements.lock"
+    assert "pin dependencies to merge_date" in refusal.next_
+    assert "hidden-tests-proven" not in report.passed
+
+
+def test_missing_test_result_fails(coding_task: CodingTaskFixture) -> None:
+    """A listed test with no result in the oracle trial fails: a proof cannot pass a test by omission."""
+    proof = CodingTaskBuilder.valid_proof()
+    del proof["oracle"]["tests"][HIDDEN_TEST_ID]
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _hidden_tests_failures(report)
+    assert refusal.offending == f"{HIDDEN_TEST_ID!r} has no result in the oracle trial"
+
+
+def test_unlisted_test_in_proof_is_ignored(coding_task: CodingTaskFixture) -> None:
+    """A test id in the proof that `tests.toml` does not list is ignored, not failed."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["nop"]["tests"]["tests/test_other.py::test_unlisted"] = "passed"
+    proof["oracle"]["tests"]["tests/test_other.py::test_unlisted"] = "failed"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    assert "hidden-tests-proven" in report.passed
+
+
+def test_stale_digest_is_unresolved(coding_task: CodingTaskFixture) -> None:
+    """A digest with one changed character is unresolved: not a pass, and not a failure (FR-35)."""
+    proof = CodingTaskBuilder.valid_proof()
+    proof["content_digest"] = str(proof["content_digest"])[:-1] + "2"
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _named(report, "hidden-tests-proven")
+    assert refusal.unresolved
+    assert "stale proof" in refusal.offending
+    assert "hidden-tests-proven" not in report.passed
+    assert report.exit_code == ExitCode.RUNTIME_UNAVAILABLE
+
+
+def test_malformed_proof_is_unresolved(coding_task: CodingTaskFixture) -> None:
+    """A proof that is not valid JSON is unresolved, and `offending` carries the parse error."""
+    path = default_proof_path(coding_task)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"content_digest": ')
+
+    report = Verify.verify_task(coding_task.task_dir, proof_path=path)
+
+    [refusal] = _named(report, "hidden-tests-proven")
+    assert refusal.unresolved
+    assert "does not parse" in refusal.offending
+    assert "Expecting value" in refusal.offending
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        (("runner",), ""),
+        (("content_digest",), 7),
+        (("nop", "status"), "skipped"),
+        (("oracle", "tests"), ["tests/test_scan.py::test_scan_sums_items"]),
+        (("oracle", "existing_suite"), None),
+    ],
+)
+def test_mistyped_proof_field_is_unresolved(coding_task: CodingTaskFixture, field_path: tuple[str, ...], value: object) -> None:
+    """A missing or mistyped proof field is unresolved, and `offending` names the field (§8)."""
+    proof = CodingTaskBuilder.valid_proof()
+    table: dict[str, Any] = proof
+    for key in field_path[:-1]:
+        table = table[key]
+    table[field_path[-1]] = value
+
+    report = _verify_with_proof(coding_task, proof)
+
+    [refusal] = _named(report, "hidden-tests-proven")
+    assert refusal.unresolved
+    assert field_path[-1] in refusal.offending
+
+
+def test_no_proof_is_unresolved_exit_5(coding_task: CodingTaskFixture) -> None:
+    """No proof file at the default path gives exit 5 and names `hidden-tests-proven` (FR-23)."""
+    code = Cli.run(["--json", "verify", str(coding_task.task_dir), "--clone", str(coding_task.clone)])
+
+    assert code == ExitCode.RUNTIME_UNAVAILABLE
+    report = Verify.verify_task(coding_task.task_dir, proof_path=default_proof_path(coding_task))
+    [refusal] = _named(report, "hidden-tests-proven")
+    assert refusal.unresolved
+    assert "does not exist" in refusal.offending
+
+
+def test_cli_default_proof_path(coding_task: CodingTaskFixture, capsys: pytest.CaptureFixture[str]) -> None:
+    """`verify <dataset>/tasks/<dir>` reads `<dataset>/proofs/<dir>.json`."""
+    CodingTaskBuilder.write_valid_proof(coding_task)
+
+    code = Cli.run(["--json", "verify", str(coding_task.task_dir), "--clone", str(coding_task.clone)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert [entry["check"] for entry in payload["unresolved"]] == ["git-channel-absence"]
+    assert payload["failures"] == []
+    assert code == ExitCode.RUNTIME_UNAVAILABLE
+
+
+def test_cli_proof_flag_overrides_default(
+    coding_task: CodingTaskFixture, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """`--proof <file>` reads that file, not the default path."""
+    stale = CodingTaskBuilder.valid_proof()
+    stale["content_digest"] = "sha256:stale"
+    CodingTaskBuilder.write_proof(default_proof_path(coding_task), stale)
+    elsewhere = CodingTaskBuilder.write_valid_proof(coding_task, tmp_path / "elsewhere" / "proof.json")
+
+    code = Cli.run(["--json", "verify", str(coding_task.task_dir), "--clone", str(coding_task.clone), "--proof", str(elsewhere)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert [entry["check"] for entry in payload["unresolved"]] == ["git-channel-absence"]
+    assert code == ExitCode.RUNTIME_UNAVAILABLE
+
+
+def test_task_outside_tasks_dir_reads_no_proof(coding_task: CodingTaskFixture, tmp_path: Path) -> None:
+    """A task directory not under `tasks/` (as at emit) gets no default proof, so a stray proof is never read."""
+    moved = tmp_path / "elsewhere" / coding_task.task_dir.name
+    shutil.copytree(coding_task.task_dir, moved)
+    CodingTaskBuilder.write_proof(moved.parent.parent / "proofs" / f"{moved.name}.json", CodingTaskBuilder.valid_proof())
+
+    code = Cli.run(["--json", "verify", str(moved), "--clone", str(coding_task.clone)])
+
+    assert code == ExitCode.RUNTIME_UNAVAILABLE
+    assert "hidden-tests-proven" not in Verify.verify_task(moved, clone=coding_task.clone).passed
