@@ -4,7 +4,7 @@ title: "[Capture] Add the coding candidate and capture --type coding"
 summary: "Make the coding candidate file and its checks, and let `capture --type coding` write it from one PR or a survey."
 feature: coding-eval-harvest
 workstream: Capture
-status: todo
+status: in-progress
 complexity: L
 merges: [C-1, C-2]
 implements: [FR-12, FR-13, FR-14, FR-16, FR-17, FR-21, FR-22, FR-33, NFR-2, NFR-4]
