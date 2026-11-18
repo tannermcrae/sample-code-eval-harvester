@@ -30,6 +30,7 @@ from typing import Any  # gh returns arbitrary JSON objects; dict[str, Any] is t
 from eval_harvest.forge import Forge
 from eval_harvest.forge_host import ForgeHost
 from eval_harvest.gitcmd import GitCommandRunner
+from eval_harvest.patchsplit import PatchSplit
 
 #: The bulk refspec that fetches every PR's head into the ``refs/remotes/pr/*`` namespace ``survey``
 #: reads. A plain ``git clone`` creates none of these, so without this fetch every PR is blocked
@@ -72,21 +73,6 @@ GH_FIELDS = (
     "number,title,body,state,createdAt,closedAt,mergedAt,mergeCommit,"
     "headRefName,headRefOid,baseRefName,baseRefOid,additions,deletions,"
     "changedFiles,labels,reviews,url,author"
-)
-
-#: Path fragments that mark a changed file as test content. Deliberately broad: over-reporting a
-#: test costs one glance, under-reporting hides the only PRs that can become a task with hidden tests.
-TEST_MARKERS = (
-    "/test/",
-    "/tests/",
-    "/spec/",
-    "/__tests__/",
-    "test_",
-    "_test.",
-    ".test.",
-    ".spec.",
-    "Test.java",
-    "conftest.py",
 )
 
 #: Field and record separators for the single ``git log`` pass. A commit message can contain any
@@ -347,7 +333,7 @@ class Survey:
         tip = GitCommandRunner.git(clone, "rev-parse", tip_ref)[1] if have_tip else (pull_request.get("headRefOid") or "")
 
         ranges = cls._range_facts(clone, tip_ref, integration, have_tip=have_tip)
-        tests = [path for path in ranges.changed_paths if any(marker in f"/{path}" for marker in TEST_MARKERS)]
+        tests = [path for path in ranges.changed_paths if PatchSplit.is_test_path(path)]
         reverts = repairs.reverts_of(pull_request.get("title", ""), integration) if integration else []
         repairs_after = cls.followups(
             commits,
