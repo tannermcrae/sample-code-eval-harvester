@@ -71,6 +71,23 @@ REWARD_KEYS: Final[tuple[str, ...]] = (
     "credited_low",
 )
 
+#: The coding reward object's keys (ADR-5). Every key is `fix_`-prefixed so a coding reward can never
+#: share a key with a review reward, and the per-type `metric.py` can tell the two kinds of row apart.
+#: Must stay equal to the keys `verifier_tpl/fix/lib/aggregate.py` writes (D-1); restated here, not
+#: imported, for the same reason `REWARD_KEYS` is. D-2 and F-1 import it from here.
+FIX_REWARD_KEYS: Final[tuple[str, ...]] = (
+    "fix_reward",
+    "fix_correct",
+    "fix_fail_to_pass",
+    "fix_pass_to_pass",
+    "fix_existing_suite",
+    "fix_validation",
+    "fix_rubric",
+    "fix_bloat",
+    "fix_taste_relative",
+    "fix_taste_practice",
+)
+
 #: Only high-severity findings block a merge (FR-14); a "substantive" defect is medium or high (a
 #: low finding is a nit). A reject datapoint needs at least one substantive finding or it is refused.
 _BLOCKING_SEVERITY: Final = "high"

@@ -169,6 +169,37 @@ class HarvestFields:
     overrides: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class FixTaskOrigin:
+    """The provenance of a coding task under ``[metadata.origin]`` (§8). A separate class, not optional
+    fields on :class:`TaskOrigin`, so the review ``task.toml`` bytes cannot change.
+
+    ``pr_url`` and ``issue_urls`` are not in the §8 example, but the FR-25 content scan (E-1) reads
+    them as leak tokens; ``issue_urls`` pairs with ``issue_numbers`` by position.
+    """
+
+    repo: str
+    pr_numbers: tuple[int, ...]
+    pr_url: str
+    issue_numbers: tuple[int, ...]
+    issue_urls: tuple[str, ...]
+    base_commit: str
+    merge_commit: str
+    base_commit_date: str
+    merged_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class FixHarvestFields:
+    """A coding task's fields under ``[metadata.harvest]`` (§8). ``content_digest`` is added later by the emitter."""
+
+    kind: str  # always "fix"
+    task_type: str  # "investigate-and-fix"
+    fail_to_pass: int
+    pass_to_pass: int
+    overrides: tuple[str, ...]
+
+
 class Harbor:
     """Builds and validates Harbor artefacts against the mirrored 0.22.0 schema. Holds no state."""
 
@@ -180,8 +211,9 @@ class Harbor:
         *,
         name: str,
         description: str,
-        origin: TaskOrigin,
-        harvest: HarvestFields,
+        origin: TaskOrigin | FixTaskOrigin,
+        harvest: HarvestFields | FixHarvestFields,
+        artifacts: Sequence[Mapping[str, TomlValue]] = (),
         version: str = _DEFAULT_TASK_VERSION,
         keywords: Sequence[str] = _DEFAULT_KEYWORDS,
         agent_timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
@@ -197,8 +229,13 @@ class Harbor:
         environment must not reach the source forge (§3), and ``separate`` verifier mode is fixed
         because ``shared`` mode is agent-scoreable (FR-32). This function only *builds* the tree;
         the caller runs :meth:`validate_task_config` and refuses on any violation.
+
+        A coding task passes :class:`FixTaskOrigin`, :class:`FixHarvestFields`, and its
+        ``artifacts`` (ADR-4: ``{source = "/work/repo", exclude = [".git"]}``), which land after
+        ``[environment]`` and before ``[metadata]`` as §8 shows. With the default ``artifacts=()``
+        and the review dataclasses no key is added, so a review ``task.toml`` is byte-identical.
         """
-        return {
+        document: dict[str, TomlValue] = {
             "schema_version": TASK_SCHEMA_VERSION,
             "task": {
                 "name": name,
@@ -213,15 +250,34 @@ class Harbor:
                 "environment": {"network_mode": verifier_network_mode, "os": "linux"},
             },
             "environment": {"network_mode": agent_network_mode, "os": "linux"},
-            "metadata": {
-                "origin": cls._origin_table(origin),
-                "harvest": cls._harvest_table(harvest),
-            },
         }
+        if artifacts:
+            document["artifacts"] = [dict(artifact) for artifact in artifacts]
+        document["metadata"] = {
+            "origin": cls._origin_table(origin),
+            "harvest": cls._harvest_table(harvest),
+        }
+        return document
 
     @staticmethod
-    def _origin_table(origin: TaskOrigin) -> dict[str, TomlValue]:
-        """``[metadata.origin]`` — Harbor's provenance shape (§8, FR-29)."""
+    def _origin_table(origin: TaskOrigin | FixTaskOrigin) -> dict[str, TomlValue]:
+        """``[metadata.origin]`` — Harbor's provenance shape (§8, FR-29).
+
+        The coding-only keys (``pr_url``, ``issue_numbers``, ``issue_urls``, ``merge_commit``) are
+        written for a :class:`FixTaskOrigin` only, so the review table keeps its exact keys.
+        """
+        if isinstance(origin, FixTaskOrigin):
+            return {
+                "repo": origin.repo,
+                "pr_numbers": list(origin.pr_numbers),
+                "pr_url": origin.pr_url,
+                "issue_numbers": list(origin.issue_numbers),
+                "issue_urls": list(origin.issue_urls),
+                "base_commit": origin.base_commit,
+                "merge_commit": origin.merge_commit,
+                "base_commit_date": origin.base_commit_date,
+                "merged_at": origin.merged_at,
+            }
         return {
             "repo": origin.repo,
             "pr_numbers": list(origin.pr_numbers),
@@ -231,8 +287,21 @@ class Harbor:
         }
 
     @staticmethod
-    def _harvest_table(harvest: HarvestFields) -> dict[str, TomlValue]:
-        """``[metadata.harvest]`` — this project's fields Harbor preserves but does not validate."""
+    def _harvest_table(harvest: HarvestFields | FixHarvestFields) -> dict[str, TomlValue]:
+        """``[metadata.harvest]`` — this project's fields Harbor preserves but does not validate.
+
+        A coding table opens with ``datapoint_type = "coding"``; a review table has no
+        ``datapoint_type``, and every reader treats a missing value as ``review`` (§8 Migration).
+        """
+        if isinstance(harvest, FixHarvestFields):
+            return {
+                "datapoint_type": "coding",
+                "kind": harvest.kind,
+                "task_type": harvest.task_type,
+                "fail_to_pass": harvest.fail_to_pass,
+                "pass_to_pass": harvest.pass_to_pass,
+                "overrides": list(harvest.overrides),
+            }
         return {
             "kind": harvest.kind,
             "expected_verdict": harvest.expected_verdict,
@@ -466,7 +535,35 @@ class Harbor:
         violations: list[SchemaViolation] = []
         violations += cls._check_artifact_source(index, source, service)
         violations += cls._check_artifact_destination(index, destination)
+        table = cls._as_table(entry)
+        if table is not None:
+            violations += cls._check_artifact_exclude(index, table)
         return violations
+
+    @staticmethod
+    def _check_artifact_exclude(index: int, table: Mapping[str, TomlValue]) -> list[SchemaViolation]:
+        """``exclude`` is absent or a list of non-empty strings with no ``..`` part (``config.py:642``).
+
+        Harbor passes each item to ``tar --exclude``. :meth:`_artifact_fields` drops keys it does not
+        know, so without this check a bad ``exclude`` would pass here and fail only inside Harbor.
+        """
+        exclude = table.get("exclude")
+        if exclude is None:
+            return []
+        well_formed = (
+            isinstance(exclude, list)
+            and all(isinstance(item, str) and item for item in exclude)
+            and not any(isinstance(item, str) and ".." in item.split("/") for item in exclude)
+        )
+        if well_formed:
+            return []
+        return [
+            SchemaViolation(
+                "compile.schema-invalid",
+                f"artifacts/{index}/exclude",
+                "exclude is a list of non-empty tar --exclude patterns with no '..' part (config.py:642)",
+            )
+        ]
 
     @classmethod
     def _artifact_fields(cls, entry: TomlValue) -> tuple[str | None, str | None, str | None]:
@@ -706,6 +803,68 @@ def main(input_path: Path, output_path: Path) -> None:
     for key in KEYS:
         values = [0 if row is None else row.get(key, 0) for row in rows]
         out[f"mean_{{key}}"] = sum(values) / len(values) if values else 0
+    out["trials"] = len(rows)
+    output_path.write_text(json.dumps(out, sort_keys=True))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input-path", type=Path, required=True)
+    parser.add_argument("-o", "--output-path", type=Path, required=True)
+    args = parser.parse_args()
+    main(args.input_path, args.output_path)
+'''.encode()
+
+    @staticmethod
+    def metric_script_by_type(key_groups: Mapping[str, Sequence[str]]) -> bytes:
+        """A dataset ``metric.py`` that averages each key over the rows of its own datapoint type (ADR-5).
+
+        A mixed dataset holds review rows (``coverage_*`` …) and coding rows (``fix_*``); one mean over
+        all rows dilutes each type by the other. A row belongs to a group when it carries at least one
+        of the group's keys, and each ``mean_<key>`` is taken over that group's rows only, a missing key
+        counting as 0. A failed trial (a ``None`` row) has no known type, so it counts as 0 in *every*
+        group — it lowers every mean, as in :meth:`metric_script`, rather than being dropped.
+
+        The same Harbor caveat as :meth:`metric_script` applies (Harbor runs ``Mean()`` on the local
+        paths, ``job.py:777-802``); the script states the aggregation. Groups are sorted by name and
+        keys within each group, so the bytes are a function of the key *sets* (NFR-1).
+        """
+        group_lines = "".join(
+            f"    {name!r}: ({', '.join(repr(key) for key in sorted(key_groups[name]))},),\n" for name in sorted(key_groups)
+        )
+        return f'''# /// script
+# dependencies = []
+# ///
+"""Generated by eval-harvest: per-type, per-key aggregation, never a collapse.
+
+Each mean is taken over the rows of its own datapoint type only (a row belongs to a type when it has
+at least one of that type's keys), so review and coding rewards never dilute each other. A missing
+key in a selected row counts as 0. A failed trial (a null row) has no known type, so it counts as 0
+in every type and lowers every mean, rather than being dropped and raising the mean of the trials
+that ran.
+"""
+
+import argparse
+import json
+from pathlib import Path
+
+GROUPS = {{
+{group_lines}}}
+
+
+def main(input_path: Path, output_path: Path) -> None:
+    rows = []
+    for line in input_path.read_text().splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+
+    out = {{}}
+    for group, keys in GROUPS.items():
+        selected = [row for row in rows if row is None or any(key in row for key in keys)]
+        for key in keys:
+            values = [0 if row is None else row.get(key, 0) for row in selected]
+            out[f"mean_{{key}}"] = sum(values) / len(values) if values else 0
+        out[f"trials_{{group}}"] = len(selected)
     out["trials"] = len(rows)
     output_path.write_text(json.dumps(out, sort_keys=True))
 
