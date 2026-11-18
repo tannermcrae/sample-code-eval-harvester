@@ -4,7 +4,7 @@ title: "[Survey] Add the paged coding survey"
 summary: "Add survey --type coding: facts and exclusion reasons for each merged PR, a fixed rank, a saved result, and small pages."
 feature: coding-eval-harvest
 workstream: Survey
-status: todo
+status: in-progress
 complexity: L
 merges: [B-1, B-2, B-3]
 implements: [FR-5, FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-33, NFR-1, NFR-2, NFR-3, NFR-4, NFR-5]
