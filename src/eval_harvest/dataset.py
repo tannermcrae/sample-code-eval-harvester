@@ -12,8 +12,9 @@ no judgment), collects each task's `content_digest` (recorded by `emit`, D-3) an
 `[metadata.harvest]` risk/severity fields, and:
 
 - writes `dataset.toml` (the Harbor manifest, FR-29) via :meth:`Harbor.dataset_manifest_document`,
-- writes a local `registry.json` via :meth:`Harbor.local_registry_document` so the set is runnable
-  on Harbor's `--registry-path` consumption path with no hub, no auth, and no network,
+- writes a local `registry.json` — a JSON list of dataset entries, each built by
+  :meth:`Harbor.local_registry_document` — so the set is runnable on Harbor's `--registry-path`
+  consumption path with no hub, no auth, and no network,
 - (re)writes the dataset `metric.py` via :meth:`Harbor.metric_script` so the per-key aggregation is
   *stated and runnable* even though Harbor's local path ignores it and falls back to `Mean()` (§3),
 - and prints the **risk distribution** (count per change-risk level, plus the count where structural
@@ -285,14 +286,20 @@ class Dataset:
 
     @classmethod
     def _write_registry(cls, dataset_dir: Path, dataset_name: str, records: list[_TaskRecord]) -> None:
-        """Write `registry.json` — the local `--registry-path` entry pointing at each task directory."""
-        document = Harbor.local_registry_document(
-            name=dataset_name,
-            version=_DEFAULT_REGISTRY_VERSION,
-            description="",
-            task_directories=[record.directory for record in records],
-            root=f"./{_TASKS_DIRNAME}",
-        )
+        """Write `registry.json` — a JSON list of `--registry-path` dataset entries, each pointing at its task directories.
+
+        A list, not one object: Harbor's `Registry.from_path` validates each element of the top-level
+        value as a `DatasetSpec`, so a bare object is iterated key by key and fails to load.
+        """
+        document = [
+            Harbor.local_registry_document(
+                name=dataset_name,
+                version=_DEFAULT_REGISTRY_VERSION,
+                description="",
+                task_directories=[record.directory for record in records],
+                root=f"./{_TASKS_DIRNAME}",
+            )
+        ]
         text = json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
         (dataset_dir / _REGISTRY_FILENAME).write_bytes(text.encode("utf-8"))
 

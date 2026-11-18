@@ -14,7 +14,8 @@ eval-harvest dataset --dataset <dir> [--json]
 ## DESCRIPTION
 
 Offline. Reads every `tasks/*` and its `task.toml`, writes `dataset.toml` (the Harbor manifest) and
-a local `registry.json`, and prints the distribution counts. Refuses `no-datapoints` on an empty
+a local `registry.json` (a JSON list of dataset entries, the shape `harbor run --registry-path` reads),
+and prints the distribution counts. Refuses `no-datapoints` on an empty
 dataset.
 
 ## METHODOLOGY

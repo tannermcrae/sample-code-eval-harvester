@@ -136,14 +136,16 @@ def test_manifest_validates(tmp_path: Path) -> None:
 
 
 def test_registry_written_and_points_at_tasks(tmp_path: Path) -> None:
-    """`registry.json` names the short dataset and points each entry at its task directory."""
+    """`registry.json` is a list of one entry that names the short dataset and points at each task directory."""
     _mixed_dataset(tmp_path)
 
     Dataset.build_dataset(tmp_path)
 
     registry = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8"))
-    assert registry["name"] == "our-repo"
-    paths = {entry["path"] for entry in registry["tasks"]}
+    assert isinstance(registry, list), "Harbor's `Registry.from_path` reads a list of dataset entries"
+    (entry,) = registry
+    assert entry["name"] == "our-repo"
+    paths = {task["path"] for task in entry["tasks"]}
     assert paths == {f"./tasks/pr{n}-{'approve' if n == 3 else 'reject'}" for n in (1, 2, 3, 4, 5)}
 
 

@@ -382,3 +382,12 @@ passed), 4 (a check failed — with the four-field failures emitted), or 5 (a ch
 writes `dataset.toml` + `registry.json` and prints the risk/severity distribution object, refusing
 `no-datapoints` at exit 3 on an empty dataset. §9 holds the full per-verb spec; these entries pin the
 load-bearing, externally observable parts so the interface survives a regeneration.
+
+**2026-11-18 — `registry.json` is a JSON list of `DatasetSpec` entries.** The entry above pins that
+`dataset` writes `registry.json`; it was written as one JSON object, and that form never loaded.
+Harbor 0.22.0 `Registry.from_path` validates each element of the top-level value as a `DatasetSpec`,
+so it needs a list — given the object, it iterates the key strings and fails validation, and
+`harbor run --registry-path` failed on every dataset this CLI wrote. `dataset` now writes a list with
+one entry; `Harbor.local_registry_document` still builds one entry, so per-type entries
+(coding-eval-harvest F-1) are appended without another shape change. The entry above is left as
+written; this log is a history.

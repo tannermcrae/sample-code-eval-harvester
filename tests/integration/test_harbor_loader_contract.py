@@ -35,6 +35,7 @@ so "not run" cannot be misread as "passed".
 
 from __future__ import annotations
 
+import json
 import shutil
 import tomllib
 from pathlib import Path
@@ -61,6 +62,7 @@ from eval_harvest.tomlw import emit_document
 # `[[tool.mypy.overrides]]`; that keeps the type check identical whether or not it is installed.
 try:
     from harbor.models.dataset.manifest import DatasetManifest
+    from harbor.models.registry import Registry
     from harbor.models.task.task import Task
 except ImportError:
     HARBOR_IS_INSTALLED = False
@@ -210,11 +212,23 @@ def test_real_harbor_validates_the_emitted_manifest(emitted_dataset: Path) -> No
     assert manifest.tasks[0].digest == recorded, "the manifest digest is not the one emit stamped into task.toml"
 
 
+@requires_real_harbor
+def test_real_harbor_loads_the_written_registry(emitted_dataset: Path) -> None:
+    """`Registry.from_path` loads the written `registry.json` — the `harbor run --registry-path` input (TP-8)."""
+    task_dir = _only_task_dir(emitted_dataset)
+
+    registry = Registry.from_path(emitted_dataset / "registry.json")
+
+    (dataset,) = registry.datasets
+    assert len(dataset.tasks) == 1
+    assert dataset.tasks[0].name == task_dir.name, "the registry task is not the emitted directory"
+
+
 # ───────────────────────────── the assertions above have teeth ─────────────────────────────
 #
-# A scanner that finds nothing must prove it scanned something (CLAUDE.md). Both checks above are
+# A scanner that finds nothing must prove it scanned something (CLAUDE.md). The checks above are
 # "does a third party accept our bytes", which passes just as readily when the check has quietly
-# stopped looking. These two break the artefact deliberately and require the red — the standing
+# stopped looking. These break the artefact deliberately and require the red — the standing
 # version of the FR-37 breaks.
 
 
@@ -236,6 +250,21 @@ def test_harbor_manifest_validation_rejects_a_corrupt_digest(emitted_dataset: Pa
 
     with pytest.raises(pydantic.ValidationError):
         DatasetManifest.model_validate(document)
+
+
+@requires_real_harbor
+def test_harbor_registry_loader_rejects_a_bare_object(emitted_dataset: Path, tmp_path: Path) -> None:
+    """The old object form of `registry.json` is rejected — the registry loader check bites.
+
+    A dict is iterable: Harbor iterates its key strings and `DatasetSpec` refuses each one, so the
+    error is a `pydantic.ValidationError`, not a generic failure.
+    """
+    (entry,) = json.loads((emitted_dataset / "registry.json").read_text(encoding="utf-8"))
+    bare_object = tmp_path / "registry.json"
+    bare_object.write_text(json.dumps(entry), encoding="utf-8")
+
+    with pytest.raises(pydantic.ValidationError):
+        Registry.from_path(bare_object)
 
 
 # ───────────────────────────── the skip is visible, not silent ─────────────────────────────

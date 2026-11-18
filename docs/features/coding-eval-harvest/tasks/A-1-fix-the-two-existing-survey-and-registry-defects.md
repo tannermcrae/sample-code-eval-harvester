@@ -4,7 +4,7 @@ title: "[Prerequisites] Fix the two existing survey and registry defects"
 summary: "Stop the review survey from blocking PRs without tests, and write registry.json as a list that Harbor loads."
 feature: coding-eval-harvest
 workstream: Prerequisites
-status: in-progress
+status: done
 complexity: M
 merges: [A-0, A-6]
 implements: [TP-7, TP-8, FR-34]
@@ -180,19 +180,19 @@ The coding half of the TP-7 test (the coding survey excludes the same PR) belong
 
 ## Acceptance Criteria
 
-- [ ] `Survey._blockers` never returns `no-test-change`.
-- [ ] A merged PR with no test change and no other blocker is harvestable in the review survey.
-- [ ] `has_test_change` and `test_paths` are still in each row.
-- [ ] The golden survey diff shows only the blocker changes.
-- [ ] No test or source file contains the string `no-test-change`.
-- [ ] `registry.json` is a JSON list with one entry.
-- [ ] Harbor 0.22.0 `Registry.from_path` loads it (`mise run test-harbor` passes, and the new test does not skip).
-- [ ] Harbor refuses the old object form in the guard test.
-- [ ] The man page says that `registry.json` is a list.
-- [ ] The pr-eval-harvest decisions log has one new dated entry for each fix.
-- [ ] Part 1 and Part 2 are two commits, separate from each other and from the coding work.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9).
+- [x] `Survey._blockers` never returns `no-test-change`.
+- [x] A merged PR with no test change and no other blocker is harvestable in the review survey.
+- [x] `has_test_change` and `test_paths` are still in each row.
+- [x] The golden survey diff shows only the blocker changes.
+- [x] No test or source file contains the string `no-test-change`.
+- [x] `registry.json` is a JSON list with one entry.
+- [x] Harbor 0.22.0 `Registry.from_path` loads it (`mise run test-harbor` passes, and the new test does not skip).
+- [x] Harbor refuses the old object form in the guard test.
+- [x] The man page says that `registry.json` is a list.
+- [x] The pr-eval-harvest decisions log has one new dated entry for each fix.
+- [x] Part 1 and Part 2 are two commits, separate from each other and from the coding work.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9).
 
 ## Out Of Scope
 
@@ -214,3 +214,27 @@ The coding half of the TP-7 test (the coding survey excludes the same PR) belong
 
 **Blocked by:** nothing. You can start now.
 **Blocks:** [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md), [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `survey-registry-defects-a-1`  ·  **Commits:** `fix(survey): stop blocking review PRs that change no tests [A-1]` (Part 1, TP-7) and `fix(dataset): write registry.json as a list Harbor loads [A-1]` (Part 2, TP-8), preceded by `style(docs): ruff-format the code blocks in the coding-eval-harvest task files`
+
+**What was implemented:** The review survey no longer attaches `no-test-change`, so a merged PR with no test change and no other blocker is harvestable for review; `has_test_change` and `test_paths` stay as row facts. `dataset` writes `registry.json` as a JSON list with one `DatasetSpec` entry, which Harbor 0.22.0 `Registry.from_path` loads; a guard test proves Harbor rejects the old object form.
+
+**Files changed:**
+- `src/eval_harvest/survey.py` — dropped the `no-test-change` blocker, its remedy entry, and the `has_tests` parameter.
+- `tests/fixtures/gh/survey/expected.json` — regenerated; only the row's `blockers` and the top-level `blockers` object changed.
+- `tests/integration/test_survey.py` — new `test_merged_pr_without_test_change_is_harvestable_for_review` and `test_blocker_remedies_cover_only_real_blockers`; three tests moved to the `pull_head_fetched=False` fixture; synthetic blocker strings now `no-changed-paths`.
+- `tests/integration/test_gitlab.py` — the GitLab survey test now asserts exit 0 with no blockers, and still checks the fetched head.
+- `tests/integration/test_batch.py` — two synthetic blocker strings.
+- `src/eval_harvest/dataset.py` — `_write_registry` wraps the entry in a list; docstrings updated.
+- `tests/integration/test_dataset.py` — the registry test reads a one-entry list.
+- `tests/integration/test_harbor_loader_contract.py` — imports `Registry`; adds `test_real_harbor_loads_the_written_registry` and `test_harbor_registry_loader_rejects_a_bare_object`.
+- `man/eval-harvest-dataset.md` — says `registry.json` is a JSON list of dataset entries.
+- `docs/features/pr-eval-harvest/decisions-tech-plan.md` — two dated 2026-11-18 entries, one per fix.
+
+**Acceptance criteria:** `_blockers` cannot return `no-test-change` and every remedy key is produced (`test_blocker_remedies_cover_only_real_blockers`, watched red with a planted stale remedy entry). The no-test PR is harvestable (`test_merged_pr_without_test_change_is_harvestable_for_review`, red before the fix). The golden diff was read: only the two blocker hunks changed. `grep -rn no-test-change src/ tests/` returns nothing. The registry list is checked by `test_registry_written_and_points_at_tasks`. `mise run test-harbor` ran against Harbor 0.22.0 (93 passed, 0 skipped); both new Harbor tests were red before Part 2. By hand, `eval-harvest dataset --dataset <dir>` on an emitted fixture dataset exited 0 and wrote a list, and `Registry.from_path(...).datasets[0].name` printed `our-repo`. `mise run check` is green (453 passed; the skips are the Harbor/MicroVM modules that `test-harbor` covers).
+
+**Deviations from the task:** The task asks for two commits, so the branch lands as two fix commits, not the single squashed commit the skill describes. A third commit came first: `main` failed `mise run check` before this task started, because ruff 0.16.6 `format --check` flagged Python code blocks in the A-2, B-1, C-1, and G-2 task files (added in `f9751b6`). That commit applies `ruff format` to those files. It changes layout only (blank lines and comment spacing), and the gate needs it to pass.
+
+**Follow-ups noticed but not done:** `mise run format` also rewrites code blocks in markdown docs, so a later doc edit can turn the gate red again. Excluding `docs/**/*.md` from ruff format, or keeping doc code blocks formatted, is a project decision.
