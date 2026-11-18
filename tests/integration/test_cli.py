@@ -108,6 +108,28 @@ class TestBatchMutualExclusion:
         assert code == ExitCode.USAGE
         assert "exactly one" in capsys.readouterr().err
 
+    def test_iteration_with_kind_fix_is_usage_error(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """`emit fix-1.json --kind fix --iteration 0` exits 2: a review flag must not change a coding task silently."""
+        candidate = tmp_path / "fix-1.json"
+        candidate.write_text("{}", encoding="utf-8")
+        code = Cli.run(["emit", str(candidate), "--kind", "fix", "--iteration", "0"])
+        assert code == ExitCode.USAGE
+        assert "eval-harvest emit: --iteration does not apply to --kind fix" in capsys.readouterr().err
+
+    def test_kind_fix_on_review_candidate_is_usage_error(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """`emit pr-1.json --kind fix` exits 2 and names the review kinds."""
+        candidate = tmp_path / "pr-1.json"
+        candidate.write_text("{}", encoding="utf-8")
+        assert Cli.run(["emit", str(candidate), "--kind", "fix"]) == ExitCode.USAGE
+        assert "--kind reject|approve" in capsys.readouterr().err
+
+    def test_review_kind_on_fix_candidate_is_usage_error(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """`emit fix-1.json --kind reject` exits 2 and names `--kind fix`."""
+        candidate = tmp_path / "fix-1.json"
+        candidate.write_text("{}", encoding="utf-8")
+        assert Cli.run(["emit", str(candidate), "--kind", "reject"]) == ExitCode.USAGE
+        assert "--kind fix" in capsys.readouterr().err
+
 
 class TestExitCodes:
     """The exit-code classes are distinct and returned exactly as declared (tech plan §9)."""
@@ -249,3 +271,23 @@ class TestRefusalLogWiring:
         assert not record_path.exists()
         assert (dataset / "refusals" / "review").is_dir(), "the type directory stays; only the record goes"
         assert Cli.run(["dataset", "--dataset", str(dataset)]) == ExitCode.SUCCESS, "`dataset` must not trip on refusals/"
+
+    def test_emit_all_reject_skips_fix_candidates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A dataset with `pr-<n>.json` and `fix-2.json`: `emit --all --kind reject` emits one task, never the fix file."""
+        fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+        _stub_capture(monkeypatch, fixture, recoverable=True)
+        dataset = _refusal_dataset(tmp_path)
+        assert Cli.run(["capture", str(fixture.pr_number), "--clone", str(fixture.clone), "--dataset", str(dataset)]) == 0
+        _fill_reject(dataset / "candidates" / f"pr-{fixture.pr_number}.json")
+        (dataset / "candidates" / "fix-2.json").write_text('{"datapoint_type": "coding"}', encoding="utf-8")
+        capsys.readouterr()
+
+        code = Cli.run(["--json", "emit", "--all", "--kind", "reject", "--dataset", str(dataset)])
+        payload = json.loads(capsys.readouterr().out)
+
+        assert code == ExitCode.SUCCESS
+        assert payload["summary"]["attempted"] == 1
+        assert [item["pr_number"] for item in payload["items"]] == [fixture.pr_number]
+        assert len(list((dataset / "tasks").iterdir())) == 1

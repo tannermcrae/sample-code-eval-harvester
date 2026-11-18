@@ -156,6 +156,7 @@ class UnresolvedCheck:
 _UNRESOLVED_REASONS: Final[dict[str, str]] = {
     "base-and-patch": "no clone provided",
     "git-channel-absence": "no container runtime",
+    "hidden-tests-proven": "no valid proof file",
 }
 
 

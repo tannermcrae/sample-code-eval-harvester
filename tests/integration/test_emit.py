@@ -28,6 +28,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from fixtures.dockerfile import copy_sources
 from fixtures.repo_builder import RepoBuilder
 
 import eval_harvest
@@ -300,16 +301,6 @@ def test_solution_excluded_from_agent_env(tmp_path: Path) -> None:
 # ───────────────────────────── the build context (FR-28) ─────────────────────────────
 
 
-def _copy_sources(dockerfile_text: str) -> list[str]:
-    """The source arguments of every `COPY` in a Dockerfile, ignoring `--flag` options and the dest."""
-    sources: list[str] = []
-    for line in dockerfile_text.splitlines():
-        if line.strip().startswith("COPY "):
-            arguments = [token for token in line.split()[1:] if not token.startswith("--")]
-            sources.extend(arguments[:-1])  # every argument but the destination
-    return sources
-
-
 def test_every_dockerfile_copy_source_exists_in_context(tmp_path: Path) -> None:
     """Each `COPY` source in `environment/Dockerfile` resolves to a file inside `environment/` (FR-28).
 
@@ -322,7 +313,7 @@ def test_every_dockerfile_copy_source_exists_in_context(tmp_path: Path) -> None:
     task = Emit.emit_datapoint(candidate, kind="reject", dataset_dir=dataset).path
     environment = task / "environment"
 
-    sources = _copy_sources((environment / "Dockerfile").read_text(encoding="utf-8"))
+    sources = copy_sources((environment / "Dockerfile").read_text(encoding="utf-8"))
     assert sources, "the sealing Dockerfile has no COPY to check"
     for source in sources:
         assert (environment / source).is_file(), f"COPY {source} resolves outside the build context {environment}"

@@ -43,11 +43,14 @@ from typing import Any
 
 import pydantic
 import pytest
+from fixtures.fix_dataset import FixDatasetBuilder
 from fixtures.repo_builder import RepoBuilder
 
 from eval_harvest.candidate import Candidate, CandidateDict, FindingDict
 from eval_harvest.dataset import Dataset
 from eval_harvest.emit import Emit
+from eval_harvest.fix_candidate import FixCandidate
+from eval_harvest.fix_emit import FixEmit
 from eval_harvest.forge import Forge
 from eval_harvest.riskmap import RiskMap
 from eval_harvest.tomlw import emit_document
@@ -188,6 +191,32 @@ def test_real_harbor_loads_an_emitted_task(emitted_dataset: Path) -> None:
     assert Task.is_valid_dir(task_dir), f"real Harbor rejects the emitted task at {task_dir}"
     task = Task(task_dir)
     assert task.name == _recorded_task_name(task_dir), "Harbor's task name disagrees with the emitted task.toml"
+
+
+@requires_real_harbor
+def test_coding_task_loads_in_harbor(tmp_path: Path) -> None:
+    """Harbor 0.22.0 loads an emitted coding task and keeps its verifier allowlist, env, and artifact (D-2).
+
+    Our validator ignores `[verifier.env]` and the artifact `exclude`, so only Harbor itself can say
+    that it reads them under these names rather than dropping them as unknown keys.
+    """
+    fix_dataset = FixDatasetBuilder.build(FixDatasetBuilder.fix_history(tmp_path / "history"), tmp_path / "ds")
+    task_dir = FixEmit.emit_datapoint(FixCandidate.load(fix_dataset.candidate_path), dataset_dir=fix_dataset.dataset).path
+
+    assert Task.is_valid_dir(task_dir), f"real Harbor rejects the emitted coding task at {task_dir}"
+    task = Task(task_dir)
+    assert task.name == _recorded_task_name(task_dir)
+    assert task.instruction == (task_dir / "instruction.md").read_text(encoding="utf-8")
+    verifier = task.config.verifier
+    assert verifier.environment_mode == "separate"
+    assert verifier.environment is not None
+    assert verifier.environment.network_mode == "allowlist"
+    assert verifier.environment.allowed_hosts == ["bedrock-runtime.us-east-1.amazonaws.com"]
+    assert verifier.env["AWS_REGION"] == "${AWS_REGION:-us-east-1}"
+    assert len(verifier.env) == 6
+    assert task.config.environment.network_mode == "no-network"
+    [artifact] = task.config.artifacts
+    assert (artifact.source, artifact.exclude) == ("/work/repo", [".git"])
 
 
 @requires_real_harbor

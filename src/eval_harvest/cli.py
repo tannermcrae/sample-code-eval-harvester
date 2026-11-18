@@ -26,6 +26,7 @@ from eval_harvest.candidate import Candidate, CandidateDict, CommentDict, Emitta
 from eval_harvest.dataset import Dataset, DatasetRefusalError
 from eval_harvest.emit import Emit, EmitRefusalError, EmitResult
 from eval_harvest.fix_candidate import FixCandidate, FixCandidateDict, FixCaptureError, FixFacts, FixIssue
+from eval_harvest.fix_emit import FixEmit
 from eval_harvest.fix_survey import (
     DEFAULT_PAGE_SIZE,
     FIX_SURVEY_RELATIVE_PATH,
@@ -45,6 +46,17 @@ from eval_harvest.show import Show
 from eval_harvest.survey import Survey, SurveyError
 from eval_harvest.tomlw import TomlValue
 from eval_harvest.verify import ContentScanSummary, Verify, VerifyReport
+
+#: The `emit --kind` values: the two review kinds read `candidates/pr-<n>.json`, `fix` reads `fix-<n>.json`.
+EMIT_KINDS: tuple[str, ...] = ("reject", "approve", "fix")
+_FIX_KIND = "fix"
+_FIX_CANDIDATE_PREFIX = "fix-"
+_REVIEW_CANDIDATE_PREFIX = "pr-"
+
+#: The line `emit` adds when `hidden-tests-proven` is unresolved (tech plan §7.2, the last line).
+_HIDDEN_TESTS_RUNNER_LINE = (
+    "hidden tests not proven: run the task's oracle and nop trials with a runner; it writes proofs/<task-dir>.json"
+)
 
 # The methodology text below is the product (tech plan §5.1): the CLI's stdout is the only place
 # the review-eval methodology lives, because the customer does not carry it and the driving agent's
@@ -637,7 +649,7 @@ class Cli:
 
     @staticmethod
     def add_emit_arguments(emit_parser: argparse.ArgumentParser) -> None:
-        """Register ``emit <candidate> --kind reject|approve [--iteration <n>] [--override <check>] [--clone <dir>]`` (§9).
+        """Register ``emit <candidate> --kind reject|approve|fix [--iteration <n>] [--override <check>] [--clone <dir>]`` (§9).
 
         ``--kind`` selects which state of the PR becomes the datapoint and drives the expected verdict
         (reject⇒block, approve⇒approve), never a severity formula (FR-14). ``--iteration`` overrides the
@@ -664,7 +676,11 @@ class Cli:
             help="emit every candidate under <dataset>/candidates/ for --kind (batch mode; mutually exclusive with <candidate>)",
         )
         emit_parser.add_argument(
-            "--kind", required=True, choices=("reject", "approve"), help="which state becomes the datapoint (drives the verdict)"
+            "--kind",
+            required=True,
+            choices=EMIT_KINDS,
+            help="reject or approve: which state of a review candidate becomes the datapoint (drives the verdict); "
+            "fix: build a coding task from a fix-<n>.json candidate",
         )
         emit_parser.add_argument(
             "--iteration",
@@ -2237,6 +2253,10 @@ class Cli:
         if (candidate_path is None) == (not all_candidates):
             print("eval-harvest emit: pass exactly one of <candidate> or --all (not both, not neither)", file=sys.stderr)
             return ExitCode.USAGE
+        usage_error = cls._emit_usage_error(kind, candidate_path, iteration_index)
+        if usage_error is not None:
+            print(f"eval-harvest emit: {usage_error}", file=sys.stderr)
+            return ExitCode.USAGE
 
         if all_candidates:
             dataset_dir = arguments.dataset if arguments.dataset is not None else Path()
@@ -2245,14 +2265,10 @@ class Cli:
             )
         if candidate_path is None:  # unreachable after the mutual-exclusion guard, but narrows the type without an assert
             return ExitCode.USAGE
-        if not candidate_path.is_file():
-            print(f"eval-harvest emit: {candidate_path} is not a file (pass a filled candidate)", file=sys.stderr)
-            return ExitCode.USAGE
         dataset_dir = cls._dataset_dir_for_candidate(candidate_path, arguments.dataset)
-        candidate = Candidate.load(candidate_path)
         try:
-            result = Emit.emit_datapoint(
-                candidate,
+            result, datapoint = cls._emit_candidate_file(
+                candidate_path,
                 kind=kind,
                 dataset_dir=dataset_dir,
                 overrides=overrides,
@@ -2260,7 +2276,7 @@ class Cli:
                 iteration_index=iteration_index,
             )
         except EmitRefusalError as refusal:
-            cls._log_emit_refusal(dataset_dir, refusal)
+            cls._log_emit_refusal(dataset_dir, refusal, kind=kind)
             return cls.refuse(
                 check=refusal.check,
                 datapoint=refusal.datapoint,
@@ -2269,9 +2285,60 @@ class Cli:
                 exit_code=refusal.exit_code,
                 json_mode=json_mode,
             )
-        cls._clear_refusal(dataset_dir, f"pr-{candidate['pr_number']}/{kind}")
+        cls._clear_refusal(dataset_dir, datapoint, datapoint_type=cls._emit_datapoint_type(kind))
         cls._report_emit(result, json_mode=json_mode)
         return ExitCode.SUCCESS
+
+    @staticmethod
+    def _emit_usage_error(kind: str, candidate_path: Path | None, iteration_index: int | None) -> str | None:
+        """The usage error for a missing candidate, or a `--kind` that does not fit `--iteration` or the file name; else None.
+
+        `--iteration` selects a review iteration, so it has no meaning for a coding task. The file-name
+        prefix is the type the capture wrote (`pr-<n>.json` review, `fix-<n>.json` coding): loading one as
+        the other would refuse every slot with a misleading reason.
+        """
+        if kind == _FIX_KIND and iteration_index is not None:
+            return "--iteration does not apply to --kind fix"
+        if candidate_path is None:
+            return None
+        if not candidate_path.is_file():
+            return f"{candidate_path} is not a file (pass a filled candidate)"
+        is_fix_candidate = candidate_path.name.startswith(_FIX_CANDIDATE_PREFIX)
+        if kind == _FIX_KIND and not is_fix_candidate:
+            return f"{candidate_path.name} is not a coding candidate (fix-<n>.json); use --kind reject|approve for it"
+        if kind != _FIX_KIND and is_fix_candidate:
+            return f"{candidate_path.name} is a coding candidate; emit it with --kind fix"
+        return None
+
+    @staticmethod
+    def _emit_datapoint_type(kind: str) -> str:
+        """The refusal-log type of an `emit --kind`: `coding` for `fix`, `review` for the two review kinds."""
+        return "coding" if kind == _FIX_KIND else "review"
+
+    # The candidate file plus emit's own contract: kind, dataset, overrides, clone, iteration.
+    @staticmethod
+    def _emit_candidate_file(  # noqa: PLR0913
+        candidate_path: Path,
+        *,
+        kind: str,
+        dataset_dir: Path,
+        overrides: tuple[str, ...],
+        clone: Path | None,
+        iteration_index: int | None,
+    ) -> tuple[EmitResult, str]:
+        """Load and emit one candidate with the emitter of its kind; return the result and its datapoint.
+
+        Raises `EmitRefusalError` unchanged, so single and batch mode refuse the same way.
+        """
+        if kind == _FIX_KIND:
+            fix_candidate = FixCandidate.load(candidate_path)
+            result = FixEmit.emit_datapoint(fix_candidate, dataset_dir=dataset_dir, overrides=overrides, clone=clone)
+            return result, f"pr-{fix_candidate['pr_number']}/{kind}"
+        candidate = Candidate.load(candidate_path)
+        result = Emit.emit_datapoint(
+            candidate, kind=kind, dataset_dir=dataset_dir, overrides=overrides, clone=clone, iteration_index=iteration_index
+        )
+        return result, f"pr-{candidate['pr_number']}/{kind}"
 
     @classmethod
     def _emit_batch(  # noqa: PLR0913 — emit's contract: the dataset, the kind, overrides, the clone, the iteration, the output mode
@@ -2292,7 +2359,10 @@ class Cli:
         candidate was written; a partial or all-refused batch exits 3.
         """
         candidates_dir = dataset_dir / "candidates"
-        candidate_paths = sorted(candidates_dir.glob("*.json")) if candidates_dir.is_dir() else []
+        prefix = _FIX_CANDIDATE_PREFIX if kind == _FIX_KIND else _REVIEW_CANDIDATE_PREFIX
+        # Each kind reads only its own type of candidate: a review batch that loaded a fix-<n>.json as a
+        # review candidate would refuse it with a misleading reason, and the reverse too.
+        candidate_paths = sorted(candidates_dir.glob(f"{prefix}*.json")) if candidates_dir.is_dir() else []
         if not candidate_paths:
             return cls.refuse(
                 check="no-candidates",
@@ -2331,22 +2401,26 @@ class Cli:
         """Emit one candidate for the batch: an ``EmitRefusalError`` becomes a per-item refusal, not a crash."""
         key = candidate_path.stem
         pr_number = cls._pr_number_from_stem(key)
-        candidate = Candidate.load(candidate_path)
         try:
-            result = Emit.emit_datapoint(
-                candidate, kind=kind, dataset_dir=dataset_dir, overrides=overrides, clone=clone, iteration_index=iteration_index
+            result, datapoint = cls._emit_candidate_file(
+                candidate_path,
+                kind=kind,
+                dataset_dir=dataset_dir,
+                overrides=overrides,
+                clone=clone,
+                iteration_index=iteration_index,
             )
         except EmitRefusalError as refusal:
             # The log is keyed by the emit datapoint (`pr-<n>/<kind>`), not the batch key (`pr-<n>`), so a
             # batch refusal and a single refusal of the same datapoint are the same file.
-            cls._log_emit_refusal(dataset_dir, refusal)
+            cls._log_emit_refusal(dataset_dir, refusal, kind=kind)
             return ItemResult.refuse(key, pr_number, check=refusal.check, offending=refusal.offending, next_=refusal.next_)
-        cls._clear_refusal(dataset_dir, f"pr-{candidate['pr_number']}/{kind}")
+        cls._clear_refusal(dataset_dir, datapoint, datapoint_type=cls._emit_datapoint_type(kind))
         return ItemResult.success(key, pr_number, payload=cls._emit_payload(result), detail=f"→ {result.path}")
 
     @classmethod
-    def _log_emit_refusal(cls, dataset_dir: Path, refusal: EmitRefusalError) -> None:
-        """File one ``emit`` refusal under its own datapoint (``pr-<n>/<kind>``)."""
+    def _log_emit_refusal(cls, dataset_dir: Path, refusal: EmitRefusalError, *, kind: str) -> None:
+        """File one ``emit`` refusal under its own datapoint (``pr-<n>/<kind>``) and the type of ``kind``."""
         cls._log_refusal(
             dataset_dir,
             check=refusal.check,
@@ -2354,30 +2428,31 @@ class Cli:
             offending=refusal.offending,
             next_=refusal.next_,
             verb="emit",
+            datapoint_type=cls._emit_datapoint_type(kind),
         )
 
-    # The FR-2 four fields plus the dataset and the verb; the count is the record's shape, so PLR0913 is suppressed.
+    # The FR-2 four fields plus the dataset, the verb, and the type; the count is the record's shape, so PLR0913 is suppressed.
     @staticmethod
     def _log_refusal(  # noqa: PLR0913
-        dataset: Path, *, check: str, datapoint: str, offending: str, next_: str, verb: str
+        dataset: Path, *, check: str, datapoint: str, offending: str, next_: str, verb: str, datapoint_type: str = "review"
     ) -> None:
-        """Keep a per-datapoint review refusal as ``<dataset>/refusals/review/<datapoint>.json`` (FR-33).
+        """Keep a per-datapoint refusal as ``<dataset>/refusals/<type>/<datapoint>.json`` (FR-33); review by default.
 
         Only refusals about one datapoint are logged; a refusal whose ``datapoint`` is a file path
         (``unknown-pr``, ``no-clean-pr``, ``no-candidates``, the risk-map refusals) is not.
         """
         record = RefusalRecordDict(check=check, datapoint=datapoint, offending=offending, next=next_, verb=verb)
-        RefusalLog.write(dataset, "review", record)
+        RefusalLog.write(dataset, datapoint_type, record)
 
     @staticmethod
-    def _clear_refusal(dataset: Path, datapoint: str) -> None:
-        """Remove a review datapoint's refusal record after it succeeds, so the log holds only current reasons."""
-        RefusalLog.clear(dataset, "review", datapoint)
+    def _clear_refusal(dataset: Path, datapoint: str, *, datapoint_type: str = "review") -> None:
+        """Remove a datapoint's refusal record after it succeeds, so the log holds only current reasons."""
+        RefusalLog.clear(dataset, datapoint_type, datapoint)
 
     @staticmethod
     def _pr_number_from_stem(stem: str) -> int | None:
-        """The PR number in a ``pr-<n>`` candidate stem, or ``None`` for a stem that is not that shape."""
-        match = re.fullmatch(r"pr-(\d+)", stem)
+        """The PR number in a ``pr-<n>`` or ``fix-<n>`` candidate stem, or ``None`` for a stem that is neither."""
+        match = re.fullmatch(r"(?:pr|fix)-(\d+)", stem)
         return int(match.group(1)) if match else None
 
     @staticmethod
@@ -2408,6 +2483,8 @@ class Cli:
         print(f"{len(result.unresolved)} check(s) unresolved:")
         for check in result.unresolved:
             print(f"  - {check.check} — {check.reason}")
+        if any(check.check == "hidden-tests-proven" for check in result.unresolved):
+            print(_HIDDEN_TESTS_RUNNER_LINE)
         print(f"not verified yet. next: eval-harvest verify {result.path}")
 
     @staticmethod

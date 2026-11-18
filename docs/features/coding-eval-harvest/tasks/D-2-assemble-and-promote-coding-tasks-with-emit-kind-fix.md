@@ -4,7 +4,7 @@ title: "[Emit] Assemble and promote coding tasks with emit --kind fix"
 summary: "Turn a filled coding candidate into a complete Harbor task, verify it, and move it into the dataset."
 feature: coding-eval-harvest
 workstream: Emit
-status: in-progress
+status: done
 complexity: L
 merges: [D-3]
 implements: [FR-20, FR-21, FR-22, FR-31]
@@ -229,15 +229,15 @@ Then, by hand: run the §14 end-to-end chain on a fixture up to `emit --kind fix
 
 ## Acceptance Criteria
 
-- [ ] `emit fix-<n>.json --kind fix` writes `tasks/<org>__<name>__pr<n>-fix/` with the §6 layout.
-- [ ] Every refusal in §9's `emit` row for `--kind fix` has a test, and each uses the four-field shape (FR-30).
-- [ ] `[metadata.origin]` contains `pr_url` and `issue_urls`.
-- [ ] An unresolved `hidden-tests-proven` does not block promotion, and the report prints the runner line.
-- [ ] A verify failure that is not overridden blocks promotion, with exit 4.
-- [ ] Harbor 0.22.0 loads an emitted coding task (`mise run test-harbor`).
-- [ ] The review emit output is byte-identical.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
+- [x] `emit fix-<n>.json --kind fix` writes `tasks/<org>__<name>__pr<n>-fix/` with the §6 layout.
+- [x] Every refusal in §9's `emit` row for `--kind fix` has a test, and each uses the four-field shape (FR-30).
+- [x] `[metadata.origin]` contains `pr_url` and `issue_urls`.
+- [x] An unresolved `hidden-tests-proven` does not block promotion, and the report prints the runner line.
+- [x] A verify failure that is not overridden blocks promotion, with exit 4.
+- [x] Harbor 0.22.0 loads an emitted coding task (`mise run test-harbor`).
+- [x] The review emit output is byte-identical.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
 
 ## Out Of Scope
 
@@ -262,3 +262,51 @@ Then, by hand: run the §14 end-to-end chain on a fixture up to `emit --kind fix
 
 **Blocked by:** [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md), [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md), [D-1](D-1-write-the-coding-task-templates-and-the-reward-stack.md), [E-1](E-1-add-the-static-coding-checks-to-verify.md)
 **Blocks:** [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `fix-emit-kind-fix-d-2`  ·  **Commit:** the `feat(emit): … [D-2]` commit on `main`
+
+**What was implemented:** `FixEmit` (`src/eval_harvest/fix_emit.py`) turns a filled `fix-<n>.json` into
+the §6 coding task: it refuses `unfilled-candidate`, `environment-recipe-invalid`,
+`hidden-test-file-missing`, and `no-fail-to-pass-test` (exit 3) in that order, renders the D-1
+templates, writes `task.toml` (allowlisted Bedrock verifier, `[verifier.env]`, the `/work/repo`
+artifact, `pr_url`/`issue_urls`), `tests/verify/tests.toml`, and `tests/judge/rubric.toml`, then
+assembles in a temp directory, validates, verifies, and promotes with the review rule (a failure
+blocks unless overridden; unresolved never blocks). `emit --kind fix` is wired into the CLI for single
+and `--all` mode.
+
+**Files changed:**
+- `src/eval_harvest/fix_emit.py` — new: `FixEmit`, `_FixTaskPlan`, `_FIX_TASK_DESCRIPTION`.
+- `src/eval_harvest/emit.py` — `hidden-tests-proven` added to `_UNRESOLVED_REASONS`.
+- `src/eval_harvest/harbor.py` — `verifier_allowed_hosts` and `verifier_env` on `task_config_document` (empty defaults; review bytes unchanged).
+- `src/eval_harvest/cli.py` — `--kind fix`; `--iteration`/file-name usage errors; per-kind candidate glob in `--all`; `fix-<n>` stems; the §7.2 runner line; coding refusals logged under `refusals/coding/`.
+- `tests/integration/test_fix_emit.py` — new: 25 tests (layout, determinism, Dockerfiles, `tests.toml`, rubric, origin, reward keys, every refusal, the hook rule, the CLI).
+- `tests/integration/test_cli.py` — `--iteration` with fix, kind/file-name mismatches, `emit --all --kind reject` skips `fix-*.json`.
+- `tests/integration/test_harbor_loader_contract.py` — `test_coding_task_loads_in_harbor`.
+- `tests/fixtures/fix_dataset.py` — new: a filled coding candidate captured from the fix history.
+- `tests/fixtures/dockerfile.py` — new: `copy_sources`, moved out of `test_emit.py` so both emit test modules share it.
+- `tests/integration/test_emit.py` — imports `copy_sources` from the fixture (no assertion changed).
+
+**Acceptance criteria:**
+- Layout: `test_fix_task_has_every_file`; manual run of the built CLI wrote `tasks/history__origin__pr101-fix/`.
+- Refusals: one test each for the four exit-3 refusals (plus the slot-token and missing-spec cases of `unfilled-candidate`); `_refusal` asserts the four fields and that no task was written.
+- `pr_url`/`issue_urls`: `test_origin_has_pr_and_issue_urls`.
+- Unresolved proof does not block, runner line printed: `test_unresolved_proof_does_not_block`, `test_cli_emit_kind_fix_reports_runner_line`, and the manual run.
+- Verify failure blocks with exit 4: `test_verify_failure_blocks_promotion`.
+- Harbor 0.22.0 loads a coding task: `test_coding_task_loads_in_harbor` under `mise run test-harbor` (94 passed). It also confirms that Harbor reads `[verifier.env]` and `allowed_hosts` under these names (both `[TODO: verify]` notes resolved); `harbor/environments/docker/docker.py` applies `allowed_hosts`.
+- Review bytes identical: `test_emit.py` golden tests pass with no assertion change.
+- How To Verify: `mise run check` green (950 passed, 1 skip: the network e2e flow hit a GitHub 502), `mise run test-harbor` green.
+- No regressions; `[project].dependencies` unchanged; `test_no_model_client.py` green.
+- Guards watched fail: removing `tests/<lockfile>`, unsorting `tests.toml`, dropping the fail-to-pass filter, dropping the `hidden-tests-proven` reason, restoring the `*.json` glob, dropping the `--iteration` usage error, and dropping the runner line each turned a test red.
+
+**Deviations from the task:**
+- `validate_filled` already reports `fix.no-fail-to-pass-test`, which would make step 1 (`unfilled-candidate`) fire before step 4. Step 1 filters that one code out so the task's own `no-fail-to-pass-test` refusal (and its test) is reachable.
+- The recipe and hidden-file refusals use the C-1 validators that already exist (`validate_recipe(candidate, dataset_dir)` checks the lockfile; `validate_hidden_test_files` checks the files and refuses an unsafe `repo_path` too).
+- `_log_refusal`/`_clear_refusal` take a `datapoint_type` (default `review`), so a coding emit refusal goes to `refusals/coding/` rather than `refusals/review/`. Without it F-1's per-type refusal counts would count coding refusals as review ones.
+- `FixEmit._run_verify_hook` restates the six-line failure filter of `Emit._run_verify_hook`, because that helper takes the review `_TaskPlan` (not on the task's list of helpers to reuse).
+- Line numbers in the task file had drifted (e.g. `_UNRESOLVED_REASONS` is at `emit.py:156`, `handle_emit` at `cli.py:~2236`); the code they named was the same.
+
+**Follow-ups noticed but not done:**
+- The `emit` help methodology text still describes review only; F-1 owns the coding help.
+- `metric.py` is still written only by review emits; F-1 writes the per-type file.

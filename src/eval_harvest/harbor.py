@@ -220,6 +220,8 @@ class Harbor:
         verifier_timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
         agent_network_mode: str = "no-network",
         verifier_network_mode: str = "no-network",
+        verifier_allowed_hosts: Sequence[str] = (),
+        verifier_env: Mapping[str, str] | None = None,
     ) -> dict[str, TomlValue]:
         """The ``task.toml`` value tree for one datapoint, in the tech-plan §8 shape.
 
@@ -234,7 +236,21 @@ class Harbor:
         ``artifacts`` (ADR-4: ``{source = "/work/repo", exclude = [".git"]}``), which land after
         ``[environment]`` and before ``[metadata]`` as §8 shows. With the default ``artifacts=()``
         and the review dataclasses no key is added, so a review ``task.toml`` is byte-identical.
+
+        A coding task's verifier calls Bedrock (D-2), so it passes ``verifier_network_mode="allowlist"``
+        with ``verifier_allowed_hosts``, and a ``verifier_env`` that lands as ``[verifier.env]`` after
+        ``[verifier.environment]``. Their empty defaults add no key, so a review task is unchanged.
         """
+        verifier_environment: dict[str, TomlValue] = {"network_mode": verifier_network_mode, "os": "linux"}
+        if verifier_allowed_hosts:
+            verifier_environment["allowed_hosts"] = list(verifier_allowed_hosts)
+        verifier: dict[str, TomlValue] = {
+            "timeout_sec": TomlFloat(verifier_timeout_sec),
+            "environment_mode": "separate",
+            "environment": verifier_environment,
+        }
+        if verifier_env:
+            verifier["env"] = dict(verifier_env)
         document: dict[str, TomlValue] = {
             "schema_version": TASK_SCHEMA_VERSION,
             "task": {
@@ -244,11 +260,7 @@ class Harbor:
                 "keywords": list(keywords),
             },
             "agent": {"timeout_sec": TomlFloat(agent_timeout_sec)},
-            "verifier": {
-                "timeout_sec": TomlFloat(verifier_timeout_sec),
-                "environment_mode": "separate",
-                "environment": {"network_mode": verifier_network_mode, "os": "linux"},
-            },
+            "verifier": verifier,
             "environment": {"network_mode": agent_network_mode, "os": "linux"},
         }
         if artifacts:
