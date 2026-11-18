@@ -20,10 +20,10 @@
 #
 # Environment:
 #   MAX_ITERATIONS   Maximum tasks in one run (default 12).
-#   PERMISSIONS      `allowlist` (default): edits are accepted, and Bash is limited to the tools
-#                    the skill uses. A command outside the list is denied, the task fails, and the
-#                    loop stops. `bypass`: --dangerously-skip-permissions. Use it only when you
-#                    accept that an unattended agent runs any command, including `git push`.
+#   PERMISSIONS      `bypass` (default): --dangerously-skip-permissions. The unattended agent runs
+#                    any command without asking, including `git push`. `allowlist`: edits are
+#                    accepted, and Bash is limited to the tools the skill uses. A command outside
+#                    the list is denied, the task fails, and the loop stops.
 #   CLAUDE_MODEL     Optional --model value.
 #
 # Logs: work/ralph/<feature>/<timestamp>-<task-id>.log (work/ is gitignored).
@@ -43,7 +43,7 @@ DRY_RUN="${2:-}"
 [[ -z "$DRY_RUN" || "$DRY_RUN" == "--dry-run" ]] || usage
 
 MAX_ITERATIONS="${MAX_ITERATIONS:-12}"
-PERMISSIONS="${PERMISSIONS:-allowlist}"
+PERMISSIONS="${PERMISSIONS:-bypass}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
