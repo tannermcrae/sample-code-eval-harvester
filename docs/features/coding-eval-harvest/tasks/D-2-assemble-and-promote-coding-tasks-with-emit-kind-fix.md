@@ -4,7 +4,7 @@ title: "[Emit] Assemble and promote coding tasks with emit --kind fix"
 summary: "Turn a filled coding candidate into a complete Harbor task, verify it, and move it into the dataset."
 feature: coding-eval-harvest
 workstream: Emit
-status: todo
+status: in-progress
 complexity: L
 merges: [D-3]
 implements: [FR-20, FR-21, FR-22, FR-31]
