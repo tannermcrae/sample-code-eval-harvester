@@ -4,7 +4,7 @@ title: "[Capture] Add coding views to brief, show, and annotate"
 summary: "Show the agent a short coding brief, the fix of one file, and let it fill coding slots with small records."
 feature: coding-eval-harvest
 workstream: Capture
-status: todo
+status: in-progress
 complexity: M
 merges: [C-3, C-4]
 implements: [FR-15, FR-16, FR-17, FR-18, FR-19, NFR-2, NFR-3]
