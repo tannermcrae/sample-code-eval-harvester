@@ -28,6 +28,15 @@ from dataclasses import dataclass
 from typing import Final
 
 from eval_harvest.candidate import CandidateDict, CommentDict, FindingDict, Violation
+from eval_harvest.fix_candidate import EnvironmentDict, FixCandidate, FixCandidateDict, HiddenTestDict, RubricCriterionDict
+
+#: The text slots a ``{"slot": …, "value": …}`` record may name, in §8 order.
+_FIX_TEXT_SLOTS: Final = ("instruction", "instruction_rationale", "tooling_note")
+
+#: The keys of a hidden-test, rubric-criterion, and environment record: the TypedDict fields, in §8 order.
+_HIDDEN_TEST_FIELDS: Final = tuple(HiddenTestDict.__annotations__)
+_RUBRIC_CRITERION_FIELDS: Final = tuple(RubricCriterionDict.__annotations__)
+_ENVIRONMENT_FIELDS: Final = tuple(EnvironmentDict.__annotations__)
 
 
 class AnnotateParseError(Exception):
@@ -53,6 +62,18 @@ class AnnotateStats:
     findings_added: int
 
 
+@dataclass(frozen=True, slots=True)
+class FixAnnotateStats:
+    """What a coding merge did: the text slots set, the hidden tests and rubric criteria added or replaced, the recipe."""
+
+    slots_set: list[str]
+    hidden_tests_added: int
+    hidden_tests_replaced: list[str]
+    rubric_criteria_added: int
+    rubric_criteria_replaced: list[str]
+    environment_set: bool
+
+
 class Annotate:
     """Parse fill records and merge them into a candidate. Holds no state."""
 
@@ -62,6 +83,13 @@ class Annotate:
     _FINDING_KEY: Final = "finding"
     _RISK_KEY: Final = "risk_classified"
     _RUBRIC_KEY: Final = "rubric_version"
+
+    #: The discriminators of the four coding records (C-2). A review record on a coding candidate, or a
+    #: coding record on a review candidate, carries none of the other type's keys and is unrecognised.
+    _SLOT_KEY: Final = "slot"
+    _HIDDEN_TEST_KEY: Final = "hidden_test"
+    _RUBRIC_CRITERION_KEY: Final = "rubric_criterion"
+    _ENVIRONMENT_KEY: Final = "environment"
 
     # ───────────────────────────── parse (one place for both input forms) ─────────────────────────────
 
@@ -265,3 +293,214 @@ class Annotate:
         if not candidate["rubric_version"]:
             slots.append("rubric_version — no rubric version pinned")
         return slots
+
+    # ───────────────────────────── coding candidate: the four slot records ─────────────────────────────
+
+    @classmethod
+    def apply_fix_records(
+        cls, candidate: FixCandidateDict, records: list[dict[str, object]], *, replace_hidden_tests: bool = False
+    ) -> tuple[FixCandidateDict, list[Violation]]:
+        """Merge coding ``records`` into a *copy* of ``candidate``; return the copy and every record-shape violation.
+
+        Pure, as :meth:`apply_records` is. Only the record shape is checked here — an unknown slot, a
+        missing key, a field of the wrong JSON type. The value rules (the ``kind`` and ``origin`` enums,
+        the ``tooling_note`` length, the recipe form) belong to :meth:`FixCandidate.validate_filled` and
+        :meth:`FixCandidate.validate_recipe`, which the CLI runs on the result, so each rule has one copy.
+        ``hidden_tests`` is sorted by ``(repo_path, name)`` after the merge (tech plan §8, NFR-1).
+        """
+        merged = copy.deepcopy(candidate)
+        if replace_hidden_tests:
+            merged["hidden_tests"] = []
+        violations: list[Violation] = []
+        for position, record in enumerate(records, start=1):
+            violations += cls._apply_one_fix_record(merged, position, record)
+        merged["hidden_tests"].sort(key=lambda entry: (entry["repo_path"], entry["name"]))
+        return merged, violations
+
+    @classmethod
+    def _apply_one_fix_record(cls, merged: FixCandidateDict, position: int, record: dict[str, object]) -> list[Violation]:
+        """Apply one coding record by its discriminator; a record with none is a violation, never a skip."""
+        if cls._SLOT_KEY in record:
+            return cls._apply_fix_text_slot(merged, position, record)
+        if cls._HIDDEN_TEST_KEY in record:
+            return cls._apply_fix_hidden_test(merged, position, record[cls._HIDDEN_TEST_KEY])
+        if cls._RUBRIC_CRITERION_KEY in record:
+            return cls._apply_fix_rubric_criterion(merged, position, record[cls._RUBRIC_CRITERION_KEY])
+        if cls._ENVIRONMENT_KEY in record:
+            return cls._apply_fix_environment(merged, position, record[cls._ENVIRONMENT_KEY])
+        known = ", ".join((cls._SLOT_KEY, cls._HIDDEN_TEST_KEY, cls._RUBRIC_CRITERION_KEY, cls._ENVIRONMENT_KEY))
+        return [
+            Violation(
+                "annotate.unrecognised-record",
+                f"records[{position}]",
+                f"record {position} carries none of the coding record keys: {known}",
+            )
+        ]
+
+    @classmethod
+    def _apply_fix_text_slot(cls, merged: FixCandidateDict, position: int, record: dict[str, object]) -> list[Violation]:
+        """Set one text slot to ``str(value)``; an unknown slot name or a missing ``value`` refuses (FR-18, FR-19)."""
+        name = record[cls._SLOT_KEY]
+        if name not in _FIX_TEXT_SLOTS:
+            detail = f"no slot {name!r} in a coding candidate; the text slots are {', '.join(_FIX_TEXT_SLOTS)}"
+            return [Violation("annotate.unknown-slot", f"records[{position}].slot", detail)]
+        if "value" not in record:
+            detail = f"the record for slot {name!r} has no `value`; the CLI never writes a slot the agent did not send"
+            return [Violation("annotate.slot-missing-field", f"records[{position}].value", detail)]
+        value = str(record["value"])
+        if name == "instruction":
+            merged["instruction"] = value
+        elif name == "instruction_rationale":
+            merged["instruction_rationale"] = value
+        else:
+            merged["tooling_note"] = value
+        return []
+
+    @classmethod
+    def _apply_fix_hidden_test(cls, merged: FixCandidateDict, position: int, payload: object) -> list[Violation]:
+        """Upsert one hidden test by ``(repo_path, name)``: an existing key is replaced, a new key is added."""
+        pointer = f"records[{position}].{cls._HIDDEN_TEST_KEY}"
+        fields, violations = cls._string_fields(payload, pointer, _HIDDEN_TEST_FIELDS)
+        if violations:
+            return violations
+        entry = HiddenTestDict(
+            repo_path=fields["repo_path"],
+            name=fields["name"],
+            kind=fields["kind"],
+            origin=fields["origin"],
+            evidence=fields["evidence"],
+        )
+        key = (entry["repo_path"], entry["name"])
+        existing = [index for index, old in enumerate(merged["hidden_tests"]) if (old["repo_path"], old["name"]) == key]
+        if existing:
+            merged["hidden_tests"][existing[0]] = entry
+        else:
+            merged["hidden_tests"].append(entry)
+        return []
+
+    @classmethod
+    def _apply_fix_rubric_criterion(cls, merged: FixCandidateDict, position: int, payload: object) -> list[Violation]:
+        """Upsert one rubric criterion by ``id``: an existing id is replaced in place, a new id is added at the end."""
+        pointer = f"records[{position}].{cls._RUBRIC_CRITERION_KEY}"
+        fields, violations = cls._string_fields(payload, pointer, _RUBRIC_CRITERION_FIELDS)
+        if violations:
+            return violations
+        criterion = RubricCriterionDict(id=fields["id"], kind=fields["kind"], text=fields["text"])
+        existing = [index for index, old in enumerate(merged["rubric_criteria"]) if old["id"] == criterion["id"]]
+        if existing:
+            merged["rubric_criteria"][existing[0]] = criterion
+        else:
+            merged["rubric_criteria"].append(criterion)
+        return []
+
+    @classmethod
+    def _apply_fix_environment(cls, merged: FixCandidateDict, position: int, payload: object) -> list[Violation]:
+        """Replace the whole environment recipe; the new dict is built in the §8 field order, not the record's."""
+        pointer = f"records[{position}].{cls._ENVIRONMENT_KEY}"
+        string_fields = tuple(field for field in _ENVIRONMENT_FIELDS if field != "setup_steps")
+        fields, violations = cls._string_fields(payload, pointer, string_fields, list_fields=("setup_steps",))
+        if violations:
+            return violations
+        steps: list[str] = [str(step) for step in payload["setup_steps"]] if isinstance(payload, dict) else []
+        merged["environment"] = EnvironmentDict(
+            base_image=fields["base_image"],
+            setup_steps=steps,
+            lockfile=fields["lockfile"],
+            test_command=fields["test_command"],
+            rationale=fields["rationale"],
+        )
+        return []
+
+    @staticmethod
+    def _string_fields(
+        payload: object, pointer: str, string_fields: tuple[str, ...], *, list_fields: tuple[str, ...] = ()
+    ) -> tuple[dict[str, str], list[Violation]]:
+        """The string fields of a record object, or the shape violations: not an object, a key missing, a wrong type.
+
+        ``list_fields`` must be JSON lists of strings. A key the shape does not know is refused too, so
+        a misspelt key is never dropped without a word.
+        """
+        if not isinstance(payload, dict):
+            return {}, [Violation("annotate.unrecognised-record", pointer, "the value must be a JSON object")]
+        expected = (*string_fields, *list_fields)
+        violations = [
+            Violation("annotate.slot-missing-field", f"{pointer}.{field}", f"`{field}` is required")
+            for field in expected
+            if field not in payload
+        ]
+        violations += [
+            Violation("annotate.unrecognised-record", f"{pointer}.{key}", f"`{key}` is not a field of this record")
+            for key in payload
+            if key not in expected
+        ]
+        violations += [
+            Violation("annotate.unrecognised-record", f"{pointer}.{field}", f"`{field}` must be a JSON string")
+            for field in string_fields
+            if field in payload and not isinstance(payload[field], str)
+        ]
+        violations += [
+            Violation("annotate.unrecognised-record", f"{pointer}.{field}", f"`{field}` must be a JSON list of strings")
+            for field in list_fields
+            if field in payload and not _is_string_list(payload[field])
+        ]
+        return {field: str(payload[field]) for field in string_fields if field in payload}, violations
+
+    # ───────────────────────────── coding report helpers (pure) ─────────────────────────────
+
+    @classmethod
+    def summarize_fix(
+        cls, original: FixCandidateDict, records: list[dict[str, object]], *, replace_hidden_tests: bool = False
+    ) -> FixAnnotateStats:
+        """What a clean coding merge did, against the pre-merge ``original``.
+
+        A "replaced" entry is one whose key was in the candidate before this run, so an overwrite is
+        never silent (the reason ``summarize`` reports ``overwritten``). With ``replace_hidden_tests`` the
+        old list was cleared first, so no hidden test counts as replaced.
+        """
+        old_tests = set() if replace_hidden_tests else {(old["repo_path"], old["name"]) for old in original["hidden_tests"]}
+        old_ids = {old["id"] for old in original["rubric_criteria"]}
+        slots_set: list[str] = []
+        tests_seen: list[tuple[str, str]] = []
+        ids_seen: list[str] = []
+        environment_set = False
+        for record in records:
+            if cls._SLOT_KEY in record:
+                slots_set.append(str(record[cls._SLOT_KEY]))
+            elif cls._HIDDEN_TEST_KEY in record:
+                tests_seen.append(cls._hidden_test_key(record[cls._HIDDEN_TEST_KEY]))
+            elif cls._RUBRIC_CRITERION_KEY in record:
+                ids_seen.append(cls._criterion_id(record[cls._RUBRIC_CRITERION_KEY]))
+            elif cls._ENVIRONMENT_KEY in record:
+                environment_set = True
+        unique_tests = list(dict.fromkeys(tests_seen))
+        unique_ids = list(dict.fromkeys(ids_seen))
+        return FixAnnotateStats(
+            slots_set=list(dict.fromkeys(slots_set)),
+            hidden_tests_added=sum(1 for key in unique_tests if key not in old_tests),
+            hidden_tests_replaced=[f"{path}::{name}" for path, name in unique_tests if (path, name) in old_tests],
+            rubric_criteria_added=sum(1 for criterion_id in unique_ids if criterion_id not in old_ids),
+            rubric_criteria_replaced=[criterion_id for criterion_id in unique_ids if criterion_id in old_ids],
+            environment_set=environment_set,
+        )
+
+    @staticmethod
+    def _hidden_test_key(payload: object) -> tuple[str, str]:
+        """The ``(repo_path, name)`` key of a hidden-test record that already passed the merge."""
+        fields: dict[str, object] = payload if isinstance(payload, dict) else {}
+        return str(fields.get("repo_path", "")), str(fields.get("name", ""))
+
+    @staticmethod
+    def _criterion_id(payload: object) -> str:
+        """The ``id`` of a rubric-criterion record that already passed the merge."""
+        fields: dict[str, object] = payload if isinstance(payload, dict) else {}
+        return str(fields.get("id", ""))
+
+    @staticmethod
+    def remaining_fix_slots(candidate: FixCandidateDict) -> list[str]:
+        """The coding slots still empty: the ``fix.slot-empty`` pointers of :meth:`FixCandidate.validate_filled`."""
+        return [violation.pointer for violation in FixCandidate.validate_filled(candidate) if violation.code == "fix.slot-empty"]
+
+
+def _is_string_list(value: object) -> bool:
+    """True for a JSON list whose every item is a string."""
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)

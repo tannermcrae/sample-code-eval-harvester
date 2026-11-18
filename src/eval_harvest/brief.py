@@ -20,9 +20,11 @@ string out, no filesystem or forge access (the rubric version is read by the CLI
 
 from __future__ import annotations
 
+import shlex
 from typing import Any, Final
 
 from eval_harvest.candidate import FILL_CONTRACT_GUIDE, CandidateDict, CommentDict, Emittability
+from eval_harvest.fix_candidate import BODY_CHAR_LIMIT, FIX_FILL_CONTRACT_GUIDE, FixCandidate, FixCandidateDict
 
 #: Printed for the rubric version when the dataset has no ``rubric.md`` (or it declares none). The
 #: brief still renders — an unpinned rubric is the agent's to resolve at fill time, not a refusal.
@@ -35,6 +37,12 @@ _KIND_WIDTH: Final = 8
 #: they align under the ``N. `` of the numbered header.
 _SECTION_INDENT: Final = "  "
 _COMMENT_CONT_INDENT: Final = "     "
+
+#: The length of the short commit id the coding brief prints for the base and the merge.
+_SHORT_SHA: Final = 12
+
+#: The line after a PR or issue body that ``capture`` cut, so the agent never takes it for the full text.
+_BODY_CUT_MARKER: Final = f"(body cut at {BODY_CHAR_LIMIT} characters)"
 
 
 class Brief:
@@ -247,3 +255,109 @@ class Brief:
         """A heading over its lines, each indented one level — the shape of every non-comment section."""
         indented = "\n".join(f"{_SECTION_INDENT}{line}" for line in lines) if lines else f"{_SECTION_INDENT}(none)"
         return f"{heading}\n{indented}"
+
+    # ───────────────────────────── coding candidate (fix-<n>.json) ─────────────────────────────
+
+    @classmethod
+    def render_fix(cls, candidate: FixCandidateDict, *, candidate_display_path: str) -> str:
+        """The human brief for a coding candidate: identity, PR and issue text, sizes, paths, slots, next commands.
+
+        No patch bytes (FR-15): the fix is read one file at a time with ``show --path``. The bodies are
+        printed as ``capture`` stored them — already cut to 4000 characters, with a marker when cut.
+        """
+        sections = [
+            "\n".join(cls._fix_identity_lines(candidate)),
+            cls._simple_section("pr", cls._fix_pr_lines(candidate)),
+            cls._simple_section("issues", cls._fix_issue_lines(candidate)),
+            cls._simple_section("size", [cls._fix_size_line(candidate)]),
+            cls._simple_section("source paths", list(candidate["source_paths"])),
+            cls._simple_section("test paths", list(candidate["test_paths"])),
+            cls._simple_section("you fill", [*FIX_FILL_CONTRACT_GUIDE, *cls._fix_unfilled_lines(candidate)]),
+            cls._simple_section("next", cls._fix_next_commands(candidate, candidate_display_path)),
+        ]
+        return "\n\n".join(sections) + "\n"
+
+    @classmethod
+    def fix_as_json(cls, candidate: FixCandidateDict, *, candidate_display_path: str) -> dict[str, Any]:
+        """The ``--json`` brief for a coding candidate: the same facts as :meth:`render_fix`, under documented keys."""
+        return {
+            "datapoint_type": candidate["datapoint_type"],
+            "repo": candidate["repo"],
+            "pr_number": candidate["pr_number"],
+            "pr_url": candidate["pr_url"],
+            "base_commit": candidate["base_commit"],
+            "base_commit_date": candidate["base_commit_date"],
+            "merge_commit": candidate["merge_commit"],
+            "merge_date": candidate["merge_date"],
+            "pr": {
+                "title": candidate["pr_title"],
+                "body": candidate["pr_body"],
+                "body_truncated": candidate["pr_body_truncated"],
+            },
+            "issues": [dict(issue) for issue in candidate["issues"]],
+            "size": {
+                "source_files": len(candidate["source_paths"]),
+                "source_lines_added": candidate["source_lines_added"],
+                "source_lines_deleted": candidate["source_lines_deleted"],
+                "test_files": len(candidate["test_paths"]),
+                "author_commits": candidate["author_commits"],
+            },
+            "source_paths": list(candidate["source_paths"]),
+            "test_paths": list(candidate["test_paths"]),
+            "fill_contract": list(FIX_FILL_CONTRACT_GUIDE),
+            "unfilled": [violation.pointer for violation in FixCandidate.validate_filled(candidate)],
+            "next_commands": cls._fix_next_commands(candidate, candidate_display_path),
+        }
+
+    @staticmethod
+    def _fix_identity_lines(candidate: FixCandidateDict) -> list[str]:
+        """The two header lines: the datapoint, repository, and PR page; then the base and the merge."""
+        return [
+            f"fix-{candidate['pr_number']} · {candidate['repo']} · {candidate['pr_url']}",
+            f"base {candidate['base_commit'][:_SHORT_SHA]} ({candidate['base_commit_date']}) · "
+            f"merge {candidate['merge_commit'][:_SHORT_SHA]} · merge_date {candidate['merge_date']}",
+        ]
+
+    @classmethod
+    def _fix_pr_lines(cls, candidate: FixCandidateDict) -> list[str]:
+        """The PR title, then its body, then the cut marker when ``capture`` cut the body."""
+        return [candidate["pr_title"], *cls._body_lines(candidate["pr_body"], truncated=candidate["pr_body_truncated"])]
+
+    @classmethod
+    def _fix_issue_lines(cls, candidate: FixCandidateDict) -> list[str]:
+        """Each linked issue: one identity line, then its body (with the cut marker); empty for no issue."""
+        lines: list[str] = []
+        for issue in candidate["issues"]:
+            lines.append(f"#{issue['number']} {issue['title']} · {issue['url']}")
+            lines += cls._body_lines(issue["body"], truncated=issue["body_truncated"])
+        return lines
+
+    @staticmethod
+    def _body_lines(body: str, *, truncated: bool) -> list[str]:
+        """A stored body as lines, verbatim, with :data:`_BODY_CUT_MARKER` after it when it was cut."""
+        lines = body.splitlines()
+        return [*lines, _BODY_CUT_MARKER] if truncated else lines
+
+    @staticmethod
+    def _fix_size_line(candidate: FixCandidateDict) -> str:
+        """The fix's size: source files and lines, test files, and the author's commit count."""
+        return (
+            f"source: {len(candidate['source_paths'])} file(s), "
+            f"+{candidate['source_lines_added']} -{candidate['source_lines_deleted']} · "
+            f"tests: {len(candidate['test_paths'])} file(s) · author_commits: {candidate['author_commits']}"
+        )
+
+    @staticmethod
+    def _fix_unfilled_lines(candidate: FixCandidateDict) -> list[str]:
+        """One line for each slot :meth:`FixCandidate.validate_filled` still reports, so the fill state is current."""
+        return [f"unfilled: {violation.pointer} — {violation.detail}" for violation in FixCandidate.validate_filled(candidate)]
+
+    @staticmethod
+    def _fix_next_commands(candidate: FixCandidateDict, candidate_display_path: str) -> list[str]:
+        """The exact next commands: ``show`` the first source file, ``annotate`` the slots, ``emit --kind fix``."""
+        commands: list[str] = []
+        if candidate["source_paths"]:
+            commands.append(f"eval-harvest show {candidate_display_path} --path {shlex.quote(candidate['source_paths'][0])}")
+        commands.append(f"eval-harvest annotate {candidate_display_path} --stdin")
+        commands.append(f"eval-harvest emit {candidate_display_path} --kind fix")
+        return commands

@@ -19,7 +19,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any  # a --from-json payload is arbitrary JSON; list[dict[str, Any]] is the honest shape.
 
-from eval_harvest.annotate import Annotate, AnnotateParseError, AnnotateStats
+from eval_harvest.annotate import Annotate, AnnotateParseError, AnnotateStats, FixAnnotateStats
 from eval_harvest.batch import Batch, BatchReport, ItemResult
 from eval_harvest.brief import Brief
 from eval_harvest.candidate import Candidate, CandidateDict, CommentDict, Emittability, Violation
@@ -249,6 +249,10 @@ class MethodologyHelpFormatter(argparse.RawDescriptionHelpFormatter):
 
     def __init__(self, prog: str) -> None:
         super().__init__(prog, width=100)
+
+
+#: How many changed paths an ``unknown-path`` refusal lists before it gives only the total.
+_UNKNOWN_PATH_LISTED = 20
 
 
 class ExitCode(IntEnum):
@@ -552,17 +556,26 @@ class Cli:
 
     @staticmethod
     def add_show_arguments(show_parser: argparse.ArgumentParser) -> None:
-        """Register ``show <candidate> --comment <id> [--iteration <n>] [--context <lines>] [--dataset <dir>]`` (§9).
+        """Register ``show <candidate> (--comment <id> [--iteration <n>] [--context <lines>] | --path <file>) [--dataset <dir>]``.
 
         ``show`` is a read-only view over ``capture``'s output: it renders only the hunk covering one
         comment so the agent need never read a whole patch file. ``--iteration`` defaults to the comment's
         first ``in_diff_iterations`` entry; an explicit value wins, so the agent can compare a line across
         rounds. ``--context`` is the extra unified-diff lines shown either side of the comment's own lines.
+        A coding candidate (the type comes from the file, tech plan §9) takes ``--path`` instead: the fix's
+        ``diff --git`` section(s) for that one file. The two forms are exclusive; ``handle_show`` checks it.
         ``--dataset`` defaults to the candidate's own dataset root, exactly as ``emit`` derives it.
         """
         show_parser.add_argument("candidate", type=Path, metavar="<candidate>", help="path to the candidate JSON file")
         show_parser.add_argument(
-            "--comment", type=int, required=True, metavar="<id>", help="the comment id (from the candidate) to show"
+            "--comment", type=int, default=None, metavar="<id>", help="the comment id (from the candidate) to show"
+        )
+        show_parser.add_argument(
+            "--path",
+            type=str,
+            default=None,
+            metavar="<file>",
+            help="a coding candidate: print the fix for this one repository path",
         )
         show_parser.add_argument(
             "--iteration",
@@ -588,13 +601,14 @@ class Cli:
 
     @staticmethod
     def add_annotate_arguments(annotate_parser: argparse.ArgumentParser) -> None:
-        """Register ``annotate <candidate> [--stdin | --from-json <file>] [--check] [--replace-findings] [--dataset <dir>]`` (§9).
+        """Register ``annotate <candidate> (--stdin | --from-json <file>) [--check] [--replace-*]`` (tech plan §9).
 
         The input source is a mutually-exclusive pair — ``--stdin`` reads JSONL, ``--from-json`` reads a
         JSON array — and exactly one is required *unless* ``--check`` is given, which may validate the
         candidate as it stands with no input at all. ``--replace-findings`` clears ``findings[]`` before
-        applying, for a rescoping run. ``--dataset`` is accepted for parity with the other verbs; the
-        candidate path is absolute, so ``annotate`` needs no dataset root of its own.
+        applying, for a rescoping run. ``--replace-hidden-tests`` is its coding twin: it clears
+        ``hidden_tests[]``. Each is a usage error on the other type of candidate. ``--dataset`` defaults to
+        the candidate's dataset root; only a coding ``--check`` reads it, for the hidden test files and the lockfile.
         """
         annotate_parser.add_argument("candidate", type=Path, metavar="<candidate>", help="path to the candidate JSON file")
         source_group = annotate_parser.add_mutually_exclusive_group()
@@ -609,7 +623,16 @@ class Cli:
             "--replace-findings", action="store_true", help="clear findings[] before applying, to rescope the finding set"
         )
         annotate_parser.add_argument(
-            "--dataset", type=Path, default=None, metavar="<dir>", help="accepted for parity with other verbs; unused"
+            "--replace-hidden-tests",
+            action="store_true",
+            help="a coding candidate: clear hidden_tests[] before applying, to restate the hidden test list",
+        )
+        annotate_parser.add_argument(
+            "--dataset",
+            type=Path,
+            default=None,
+            metavar="<dir>",
+            help="the dataset directory (default: the candidate's dataset root; a coding --check reads it)",
         )
 
     @staticmethod
@@ -1635,6 +1658,8 @@ class Cli:
         if not candidate_path.is_file():
             print(f"eval-harvest brief: {candidate_path} is not a file (pass a captured candidate)", file=sys.stderr)
             return ExitCode.USAGE
+        if FixCandidate.datapoint_type_of(candidate_path) == "coding":
+            return cls._handle_brief_coding(arguments)
 
         candidate = Candidate.load(candidate_path)
         emittability = Candidate.emittability(candidate)
@@ -1689,6 +1714,32 @@ class Cli:
         )
 
     @classmethod
+    def _handle_brief_coding(cls, arguments: argparse.Namespace) -> int:
+        """Print the brief of a coding candidate, or refuse ``malformed-candidate`` when a fact is missing.
+
+        ``--body-chars`` does not apply: ``capture`` already cut each body to 4000 characters.
+        """
+        json_mode: bool = arguments.json
+        candidate_path: Path = arguments.candidate
+        candidate = FixCandidate.load(candidate_path)
+        violations = FixCandidate.validate_facts(candidate)
+        if violations:
+            return cls.refuse(
+                check="malformed-candidate",
+                datapoint=candidate_path.stem,
+                offending="; ".join(str(violation) for violation in violations),
+                next_=f"capture the PR again with `capture {candidate.get('pr_number', '<n>')} --type coding`",
+                exit_code=ExitCode.REFUSAL,
+                json_mode=json_mode,
+            )
+        display_path = str(candidate_path)
+        if json_mode:
+            print(json.dumps(Brief.fix_as_json(candidate, candidate_display_path=display_path)))
+        else:
+            print(Brief.render_fix(candidate, candidate_display_path=display_path), end="")
+        return ExitCode.SUCCESS
+
+    @classmethod
     def handle_show(cls, arguments: argparse.Namespace) -> int:  # noqa: PLR0911 — one return per refusal class (§9)
         """Render only the hunk covering one comment, so the agent never reads a whole patch (tech plan §5.3).
 
@@ -1700,13 +1751,20 @@ class Cli:
         """
         json_mode: bool = arguments.json
         candidate_path: Path = arguments.candidate
-        comment_id: int = arguments.comment
         datapoint = candidate_path.stem
 
         if not candidate_path.is_file():
             print(f"eval-harvest show: {candidate_path} is not a file (pass a captured candidate)", file=sys.stderr)
             return ExitCode.USAGE
+        is_coding = FixCandidate.datapoint_type_of(candidate_path) == "coding"
+        flag_problem = cls._show_flag_problem(arguments, is_coding=is_coding)
+        if flag_problem:
+            print(f"eval-harvest show: error: {flag_problem}", file=sys.stderr)
+            return ExitCode.USAGE
+        if is_coding:
+            return cls._handle_show_coding(arguments)
 
+        comment_id: int = arguments.comment
         candidate = Candidate.load(candidate_path)
         comment = next((one for one in candidate["comments"] if one["id"] == comment_id), None)
         if comment is None:
@@ -1734,6 +1792,80 @@ class Cli:
         hunks = Show.hunks_for_location(diff, comment["path"], comment["line_start"], comment["line_end"])
         cls._report_show(comment, iteration_index, hunks, arguments.context, json_mode=json_mode)
         return ExitCode.SUCCESS
+
+    @staticmethod
+    def _show_flag_problem(arguments: argparse.Namespace, *, is_coding: bool) -> str | None:
+        """The one-line usage error for a flag that does not fit the candidate's type, or ``None``.
+
+        ``--comment`` is no longer ``required`` in argparse (a coding candidate does not take it), so the
+        review case without it is caught here and still exits 2.
+        """
+        if is_coding:
+            if arguments.comment is not None or arguments.iteration is not None:
+                return "a coding candidate takes --path <file>, not --comment or --iteration"
+            if arguments.path is None:
+                return "a coding candidate needs --path <file> (one of its source_paths or test_paths)"
+            return None
+        if arguments.path is not None:
+            return "--path is for a coding candidate; a review candidate takes --comment <id>"
+        if arguments.comment is None:
+            return "the following arguments are required: --comment"
+        return None
+
+    @classmethod
+    def _handle_show_coding(cls, arguments: argparse.Namespace) -> int:
+        """Print the fix of one file of a coding candidate: its sections from the source patch, then the test patch.
+
+        Refuses ``unknown-path`` (exit 3) for a path the fix does not change, and ``missing-patch`` (exit 3)
+        when a patch file is gone. Reads only the candidate and its two patches (NFR-2).
+        """
+        json_mode: bool = arguments.json
+        candidate_path: Path = arguments.candidate
+        path: str = arguments.path
+        datapoint = candidate_path.stem
+        candidate = FixCandidate.load(candidate_path)
+        if path not in candidate["source_paths"] and path not in candidate["test_paths"]:
+            return cls._refuse_unknown_path(candidate, path, datapoint, json_mode=json_mode)
+
+        dataset_dir = cls._dataset_dir_for_candidate(candidate_path, arguments.dataset)
+        diffs: list[str] = []
+        for patch_relpath in (candidate["source_patch_path"], candidate["test_patch_path"]):
+            patch_path = dataset_dir / patch_relpath
+            if not patch_path.is_file():
+                return cls.refuse(
+                    check="missing-patch",
+                    datapoint=datapoint,
+                    offending=f"{patch_relpath} is not present under the dataset",
+                    next_="re-run `eval-harvest capture` so the iteration patches are materialized",
+                    exit_code=ExitCode.REFUSAL,
+                    json_mode=json_mode,
+                )
+            # errors="replace": real patches carry non-UTF-8 bytes, and this is a display path, not a checker.
+            diffs.append(patch_path.read_bytes().decode("utf-8", errors="replace"))
+
+        sections = Show.fix_sections_for_path(diffs[0], diffs[1], path)
+        part = "source" if path in candidate["source_paths"] else "tests"
+        if json_mode:
+            print(json.dumps(Show.fix_as_json(path, part, sections)))
+        else:
+            print(Show.render_fix(path, part, sections), end="")
+        return ExitCode.SUCCESS
+
+    @classmethod
+    def _refuse_unknown_path(cls, candidate: FixCandidateDict, path: str, datapoint: str, *, json_mode: bool) -> int:
+        """Refuse ``unknown-path``: the fix does not change ``path``; ``next`` lists up to 20 paths it does change."""
+        changed = [*candidate["source_paths"], *candidate["test_paths"]]
+        listed = ", ".join(changed[:_UNKNOWN_PATH_LISTED])
+        if len(changed) > _UNKNOWN_PATH_LISTED:
+            listed += f" (first {_UNKNOWN_PATH_LISTED} of {len(changed)})"
+        return cls.refuse(
+            check="unknown-path",
+            datapoint=datapoint,
+            offending=f"{path} is not changed by this fix",
+            next_=f"pass --path naming a changed file: {listed}",
+            exit_code=ExitCode.REFUSAL,
+            json_mode=json_mode,
+        )
 
     @classmethod
     def _refuse_unknown_comment(
@@ -1828,6 +1960,11 @@ class Cli:
                 file=sys.stderr,
             )
             return ExitCode.USAGE
+        is_coding = FixCandidate.datapoint_type_of(candidate_path) == "coding"
+        flag_problem = cls._annotate_flag_problem(arguments, is_coding=is_coding)
+        if flag_problem:
+            print(f"eval-harvest annotate: error: {flag_problem}", file=sys.stderr)
+            return ExitCode.USAGE
 
         try:
             records = cls._parse_annotate_input(arguments)
@@ -1840,6 +1977,9 @@ class Cli:
                 exit_code=ExitCode.REFUSAL,
                 json_mode=json_mode,
             )
+
+        if is_coding:
+            return cls._handle_annotate_coding(arguments, records)
 
         candidate = Candidate.load(candidate_path)
         merged, apply_violations = Annotate.apply_records(candidate, records, replace_findings=arguments.replace_findings)
@@ -1943,6 +2083,125 @@ class Cli:
                 print(f"  - {slot}")
         if not violations:
             print("fully and coherently filled")
+            return ExitCode.SUCCESS
+        print(f"{len(violations)} unresolved:")
+        for violation in violations:
+            print(f"  - {violation}")
+        return ExitCode.REFUSAL
+
+    @staticmethod
+    def _annotate_flag_problem(arguments: argparse.Namespace, *, is_coding: bool) -> str | None:
+        """The one-line usage error for a ``--replace-*`` flag that does not fit the candidate's type, or ``None``."""
+        if is_coding and arguments.replace_findings:
+            return "--replace-findings is for a review candidate; a coding candidate takes --replace-hidden-tests"
+        if not is_coding and arguments.replace_hidden_tests:
+            return "--replace-hidden-tests is for a coding candidate; a review candidate takes --replace-findings"
+        return None
+
+    @classmethod
+    def _handle_annotate_coding(cls, arguments: argparse.Namespace, records: list[dict[str, object]]) -> int:
+        """Merge coding records into a coding candidate, or ``--check`` what still stops ``emit`` (tech plan §9).
+
+        A write refuses on any record-shape violation and on any wrong value; the two "not filled yet"
+        codes do not block, because the agent fills the candidate one record at a time. ``--check`` runs
+        every check ``emit`` runs on the slots — the values, the hidden test files, and the recipe — and
+        writes nothing, so a driver can loop until it exits 0.
+        """
+        json_mode: bool = arguments.json
+        candidate_path: Path = arguments.candidate
+        replace_hidden_tests: bool = arguments.replace_hidden_tests
+        candidate = FixCandidate.load(candidate_path)
+        merged, apply_violations = Annotate.apply_fix_records(candidate, records, replace_hidden_tests=replace_hidden_tests)
+
+        if arguments.check:
+            dataset_dir = cls._dataset_dir_for_candidate(candidate_path, arguments.dataset)
+            violations = (
+                apply_violations
+                + FixCandidate.validate_filled(merged)
+                + FixCandidate.validate_hidden_test_files(merged, dataset_dir)
+                + FixCandidate.validate_recipe(merged, dataset_dir)
+            )
+            return cls._report_annotate_coding_check(candidate_path, merged, violations, json_mode=json_mode)
+
+        not_filled_yet = ("fix.slot-empty", "fix.no-fail-to-pass-test")
+        fatal = apply_violations + [v for v in FixCandidate.validate_filled(merged) if v.code not in not_filled_yet]
+        if fatal:
+            return cls._refuse_annotate(fatal, candidate_path.stem, json_mode=json_mode)
+
+        FixCandidate.dump(merged, candidate_path)
+        stats = Annotate.summarize_fix(candidate, records, replace_hidden_tests=replace_hidden_tests)
+        cls._report_annotate_coding(candidate_path, merged, stats, json_mode=json_mode)
+        return ExitCode.SUCCESS
+
+    @classmethod
+    def _report_annotate_coding(
+        cls, candidate_path: Path, merged: FixCandidateDict, stats: FixAnnotateStats, *, json_mode: bool
+    ) -> None:
+        """Report a coding merge: what was set, added, and replaced, and which slots remain (human or ``--json``)."""
+        remaining = Annotate.remaining_fix_slots(merged)
+        if json_mode:
+            print(
+                json.dumps(
+                    {
+                        "candidate": str(candidate_path),
+                        "slots_set": stats.slots_set,
+                        "hidden_tests_added": stats.hidden_tests_added,
+                        "hidden_tests_replaced": stats.hidden_tests_replaced,
+                        "rubric_criteria_added": stats.rubric_criteria_added,
+                        "rubric_criteria_replaced": stats.rubric_criteria_replaced,
+                        "environment_set": stats.environment_set,
+                        "remaining_slots": remaining,
+                        "ok": True,
+                    }
+                )
+            )
+            return
+        print(str(candidate_path))
+        print(cls._annotate_coding_summary_line(stats))
+        if remaining:
+            print("remaining slots:")
+            for slot in remaining:
+                print(f"  - {slot}")
+
+    @staticmethod
+    def _annotate_coding_summary_line(stats: FixAnnotateStats) -> str:
+        """``set instruction · hidden tests: 2 added, 1 replaced (a.py::t) · rubric: 1 added · environment set``."""
+        parts = [f"set {', '.join(stats.slots_set)}"] if stats.slots_set else []
+        for label, added, replaced in (
+            ("hidden tests", stats.hidden_tests_added, stats.hidden_tests_replaced),
+            ("rubric", stats.rubric_criteria_added, stats.rubric_criteria_replaced),
+        ):
+            counts = [f"{added} added"] if added else []
+            if replaced:
+                counts.append(f"{len(replaced)} replaced ({', '.join(replaced)})")
+            if counts:
+                parts.append(f"{label}: {', '.join(counts)}")
+        if stats.environment_set:
+            parts.append("environment set")
+        return " · ".join(parts) if parts else "no record applied"
+
+    @staticmethod
+    def _report_annotate_coding_check(
+        candidate_path: Path, merged: FixCandidateDict, violations: list[Violation], *, json_mode: bool
+    ) -> int:
+        """Report a coding ``--check``: the remaining slots and every violation; exit 0 only when there is none."""
+        remaining = Annotate.remaining_fix_slots(merged)
+        if json_mode:
+            payload = {
+                "candidate": str(candidate_path),
+                "ok": not violations,
+                "violations": [str(violation) for violation in violations],
+                "remaining_slots": remaining,
+            }
+            print(json.dumps(payload))
+            return ExitCode.SUCCESS if not violations else ExitCode.REFUSAL
+        print(str(candidate_path))
+        if remaining:
+            print("remaining slots:")
+            for slot in remaining:
+                print(f"  - {slot}")
+        if not violations:
+            print("fully filled; ready for `emit --kind fix`")
             return ExitCode.SUCCESS
         print(f"{len(violations)} unresolved:")
         for violation in violations:

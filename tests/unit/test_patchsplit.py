@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from eval_harvest.patchsplit import TEST_MARKERS, PatchSplit
+from eval_harvest.patchsplit import TEST_MARKERS, PatchSplit, SplitPatch
 
 #: Three sections: source, test, source. Catches a section landing in both halves or in neither.
 _SRC_A = """diff --git a/src/a.py b/src/a.py
@@ -214,3 +214,20 @@ def test_section_paths_sorted_unique() -> None:
 def test_section_paths_empty_diff() -> None:
     """An empty diff names no path."""
     assert PatchSplit.section_paths("") == ()
+
+
+def test_file_sections_agrees_with_split() -> None:
+    """``split`` is ``file_sections`` put into two parts by ``is_test_path``, so the two rules cannot disagree."""
+    mixed = _SRC_A + _TEST_A + _SRC_B + _DELETED_TEST + _RENAME_INTO_TESTS
+    sections = PatchSplit.file_sections(mixed)
+    assert "".join(sections) == mixed
+    test_part = "".join(section for section in sections if PatchSplit.is_test_path(PatchSplit.section_path(section)))
+    source_part = "".join(section for section in sections if not PatchSplit.is_test_path(PatchSplit.section_path(section)))
+    assert PatchSplit.split(mixed) == SplitPatch(source_patch=source_part, test_patch=test_part)
+    assert [PatchSplit.section_path(section) for section in sections] == [
+        "src/a.py",
+        "tests/test_a.py",
+        "src/b.py",
+        "tests/test_gone.py",
+        "tests/test_x.py",
+    ]

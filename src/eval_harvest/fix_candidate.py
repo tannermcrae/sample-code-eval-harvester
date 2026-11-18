@@ -50,6 +50,19 @@ RUBRIC_CRITERION_KINDS: Final = ("fail_to_pass", "pass_to_pass")
 #: ``_AGENT_BASE_IMAGE``: Docker Hub rate-limits anonymous pulls, ECR Public does not.
 ALLOWED_BASE_IMAGE_PREFIX: Final = "public.ecr.aws/"
 
+#: The coding fill contract — one short line for each slot the agent owns — that ``brief`` prints under
+#: "you fill". F-1 writes the full method text in the help; these lines only name each slot and its shape.
+FIX_FILL_CONTRACT_GUIDE: Final = (
+    "instruction — the symptom and the expected behavior; no file paths, function names, or cause",
+    "instruction_rationale — why this instruction gives enough information and does not give the answer",
+    f"tooling_note — one line, at most {TOOLING_NOTE_MAX_CHARS} characters, how to run the tests in this repository",
+    "hidden_tests[] — each with repo_path, name, kind (fail_to_pass|pass_to_pass), origin (pr|agent), and evidence;"
+    " put each file in candidates/fix-<n>/hidden/<repo_path>",
+    "rubric_criteria[] — each with id, kind, and text",
+    "environment — base_image (from public.ecr.aws/), setup_steps (single lines), lockfile (a file in"
+    " candidates/fix-<n>/), test_command (writes JUnit XML to $JUNIT_PATH), and rationale; pin dependencies to merge_date",
+)
+
 #: The ``datapoint_type`` of a candidate with no such field: every review candidate written before C-1.
 _REVIEW_DATAPOINT_TYPE: Final = "review"
 

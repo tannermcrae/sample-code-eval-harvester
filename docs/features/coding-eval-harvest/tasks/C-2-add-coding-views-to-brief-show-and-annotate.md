@@ -4,7 +4,7 @@ title: "[Capture] Add coding views to brief, show, and annotate"
 summary: "Show the agent a short coding brief, the fix of one file, and let it fill coding slots with small records."
 feature: coding-eval-harvest
 workstream: Capture
-status: in-progress
+status: done
 complexity: M
 merges: [C-3, C-4]
 implements: [FR-15, FR-16, FR-17, FR-18, FR-19, NFR-2, NFR-3]
@@ -239,18 +239,18 @@ Manual checks on a captured fixture:
 
 ## Acceptance Criteria
 
-- [ ] `brief fix-<n>.json` prints identity, PR text, issue text, sizes, paths, the fill contract, the unfilled slots, and the next commands, and it prints no `@@` line.
-- [ ] `brief --json` gives the keys in "Schemas & Contracts".
-- [ ] `show fix-<n>.json --path <file>` prints only the sections of that file, from the source patch and the test patch.
-- [ ] `unknown-path`, `missing-patch`, and `malformed-candidate` refuse with the four fields and exit 3.
-- [ ] `annotate` on a coding candidate accepts the four record shapes in "Schemas & Contracts" and merges them as the steps say.
-- [ ] A record for an unknown slot, or with a missing key, refuses with exit 3 and the file does not change.
-- [ ] `hidden_tests` is sorted by `(repo_path, name)` after each merge.
-- [ ] `annotate --check` on a coding candidate exits 0 only when `validate_filled`, `validate_hidden_test_files`, and `validate_recipe` all return no violation.
-- [ ] The CLI never writes a value that the agent did not send (FR-19).
-- [ ] Every review `brief`, `show --comment`, and `annotate` command gives the same bytes as before.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green.
+- [x] `brief fix-<n>.json` prints identity, PR text, issue text, sizes, paths, the fill contract, the unfilled slots, and the next commands, and it prints no `@@` line.
+- [x] `brief --json` gives the keys in "Schemas & Contracts".
+- [x] `show fix-<n>.json --path <file>` prints only the sections of that file, from the source patch and the test patch.
+- [x] `unknown-path`, `missing-patch`, and `malformed-candidate` refuse with the four fields and exit 3.
+- [x] `annotate` on a coding candidate accepts the four record shapes in "Schemas & Contracts" and merges them as the steps say.
+- [x] A record for an unknown slot, or with a missing key, refuses with exit 3 and the file does not change.
+- [x] `hidden_tests` is sorted by `(repo_path, name)` after each merge.
+- [x] `annotate --check` on a coding candidate exits 0 only when `validate_filled`, `validate_hidden_test_files`, and `validate_recipe` all return no violation.
+- [x] The CLI never writes a value that the agent did not send (FR-19).
+- [x] Every review `brief`, `show --comment`, and `annotate` command gives the same bytes as before.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green.
 
 ## Out Of Scope
 
@@ -278,3 +278,46 @@ Manual checks on a captured fixture:
 
 **Blocked by:** [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md)
 **Blocks:** [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `coding-views-brief-show-annotate-c-2`  ·  **Commit:** see `git log --grep "\[C-2\]"`
+
+**What was implemented:** `brief`, `show`, and `annotate` now read the candidate's `datapoint_type` and
+dispatch a coding candidate to its own view. `brief` prints a patch-free coding brief. `show --path <file>`
+prints the whole `diff --git` section(s) of one changed file, deleted files included. `annotate` merges the
+four coding record shapes (text slot, hidden test, rubric criterion, environment) through the pure
+`Annotate.apply_fix_records`, and reports every replacement. `--check` exits 0 only when
+`validate_filled`, `validate_hidden_test_files`, and `validate_recipe` are all clean.
+
+**Files changed:**
+- `src/eval_harvest/fix_candidate.py`: `FIX_FILL_CONTRACT_GUIDE`.
+- `src/eval_harvest/brief.py`: `Brief.render_fix`, `Brief.fix_as_json`, and their helpers.
+- `src/eval_harvest/show.py`: `Show.fix_sections_for_path`, `Show.render_fix`, `Show.fix_as_json`.
+- `src/eval_harvest/annotate.py`: the coding discriminators, `apply_fix_records` and its `_apply_fix_*` helpers, `FixAnnotateStats`, `summarize_fix`, `remaining_fix_slots`.
+- `src/eval_harvest/cli.py`: the type dispatch in `handle_brief`, `handle_show`, and `handle_annotate`; `show --path` (`--comment` no longer argparse-required); `annotate --replace-hidden-tests`; `_handle_brief_coding`, `_handle_show_coding`, `_refuse_unknown_path`, `_handle_annotate_coding`, `_report_annotate_coding`, `_report_annotate_coding_check`, and the flag-mismatch usage checks.
+- `tests/integration/test_brief_coding.py`, `tests/integration/test_show_coding.py`, `tests/integration/test_annotate_coding.py`: new.
+- `tests/unit/test_patchsplit.py`: `test_file_sections_agrees_with_split`.
+
+**Acceptance criteria:**
+- No patch bytes in the brief: `test_brief_coding_has_no_hunk_header`, plus a manual run where `brief … | grep -c '^@@'` gave 0.
+- JSON keys: `test_brief_coding_json_shape`.
+- `show --path` sections: `test_show_path_prints_only_that_file`, `_finds_test_file`, and `_deleted_file`, plus a manual run.
+- The refusals: `test_show_path_unknown_path`, `test_show_coding_missing_patch`, and `test_brief_coding_refuses_malformed_candidate`.
+- The record shapes, unknown slots, missing keys, sorting, and `--check`: the `test_annotate_coding_*` tests. The manual run printed the six records, then `--check` exited 3 and named only the hidden test file and the lockfile, then exited 0 once both existed.
+- Review paths unchanged: `test_brief.py`, `test_show.py`, and `test_annotate.py` pass without edits.
+- `mise run check`: green (804 passed, 87 skipped).
+
+I watched each guard go red by breaking it on purpose: the brief dispatch, the source-plus-tests and deleted-file section lookup, the unknown-slot check, the `hidden_tests` sort, the "not filled yet" exclusion, the value-rule fatal filter, and the `validate_recipe` call in `--check`.
+
+**Deviations from the task:**
+- **Step 8: `PatchSplit.file_sections` already existed.** E-1 had added it, it returns `list[str]`, and `split`, `section_paths` (used by `verify`), and the C-1 tests already call it. I did not change its signature. `Show.fix_sections_for_path` uses `file_sections` with `section_path`, so `show` and `split` share one section rule, which is what step 8 asks for. `test_file_sections_agrees_with_split` pins that.
+- **Line numbers in the task were out of date.** C-1 had grown `cli.py`, so the cited lines had moved. Every function the task names exists.
+- **Extra shape checks in `annotate`.** A coding record object with an unknown key (for example `evidense`), or with a non-string field, is refused with `annotate.unrecognised-record`. Without this, the key or field would be dropped or coerced with no message.
+- **`annotate --dataset` help text.** It said "unused". Coding `--check` now reads the dataset directory, so the help says that.
+
+**NFR-3 measurement (for G-1):** a coding brief with a 4001-character PR body and one 4001-character issue body is 10 509 bytes, below the 12 KiB straw man. With three issue bodies it would be over 12 KiB, as Notes & Gotchas predicted.
+
+**Follow-ups noticed but not done:**
+- `PatchSplit.section_path` keeps git's quoting for a non-ASCII path, but `source_paths` comes from `numstat -z` and is unquoted. As a result, `show --path café.py` finds the path but prints no section. Decoding the quoted header in `section_path` would fix it.
+- `show` on a coding candidate ignores `--context` (a review-only flag) without a message. `--iteration` and `--comment` are refused.

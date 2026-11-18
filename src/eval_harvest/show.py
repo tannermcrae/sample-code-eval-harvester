@@ -22,6 +22,7 @@ from typing import Final
 
 from eval_harvest import diffspan
 from eval_harvest.candidate import CommentDict
+from eval_harvest.patchsplit import PatchSplit
 
 #: The ``+++ b/<path>`` header names the file the hunks that follow apply to (the post-change path,
 #: which is what a comment's ``path`` is recorded against).
@@ -163,3 +164,31 @@ class Show:
             "body": comment["body"],
             "hunk": Show._trimmed_text(hunks, comment, context),
         }
+
+    # ───────────────────────────── coding candidate: one file of the fix ─────────────────────────────
+
+    @staticmethod
+    def fix_sections_for_path(source_diff: str, test_diff: str, path: str) -> list[str]:
+        """The whole ``diff --git`` section of each file section that changes ``path``: source patch first, then tests.
+
+        Each section is printed whole — header, ``---``/``+++`` lines, and every hunk — and is cut by
+        :meth:`PatchSplit.file_sections`, the rule that split the two patches. Not :meth:`_hunk_blocks`:
+        it keys on ``+++ b/`` and drops every hunk of a deleted file, whose new side is ``/dev/null``.
+        """
+        return [
+            section
+            for diff in (source_diff, test_diff)
+            for section in PatchSplit.file_sections(diff)
+            if PatchSplit.section_path(section) == path
+        ]
+
+    @staticmethod
+    def render_fix(path: str, part: str, sections: list[str]) -> str:
+        """The human rendering: a ``<path> · <part>`` header, then each section verbatim and newline-terminated."""
+        body = "".join(section if section.endswith("\n") else f"{section}\n" for section in sections)
+        return f"{path} · {part}\n{body}"
+
+    @staticmethod
+    def fix_as_json(path: str, part: str, sections: list[str]) -> dict[str, object]:
+        """The ``--json`` payload: the path, which patch it is in (``source`` or ``tests``), and its sections."""
+        return {"path": path, "part": part, "sections": list(sections)}
