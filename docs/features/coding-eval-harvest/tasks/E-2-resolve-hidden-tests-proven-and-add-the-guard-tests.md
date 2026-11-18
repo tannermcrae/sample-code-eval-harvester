@@ -4,7 +4,7 @@ title: "[Verify] Resolve hidden-tests-proven and add the guard tests"
 summary: "Read the runner's proof file in verify, then break each new coding check on purpose and watch it fail."
 feature: coding-eval-harvest
 workstream: Verify
-status: todo
+status: in-progress
 complexity: M
 merges: [E-4, E-5]
 implements: [FR-23, FR-25, FR-26, FR-27, FR-28, FR-29, FR-35, NFR-8]
