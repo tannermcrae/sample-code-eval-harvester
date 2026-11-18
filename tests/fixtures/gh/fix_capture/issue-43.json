@@ -1,0 +1,8 @@
+{
+  "url": "https://api.github.com/repos/{{REPO_OWNER}}/{{REPO_NAME}}/issues/43",
+  "html_url": "https://github.com/{{REPO_OWNER}}/{{REPO_NAME}}/issues/43",
+  "number": 43,
+  "title": "scan() ignores None",
+  "body": "scan(None) should behave like scan([]).",
+  "state": "closed"
+}

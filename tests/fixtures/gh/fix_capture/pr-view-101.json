@@ -1,0 +1,52 @@
+{
+  "body": "Fixes #42 and #43.",
+  "closingIssuesReferences": [
+    {
+      "id": "I_fixture42",
+      "number": 43,
+      "repository": {
+        "id": "R_fixture",
+        "name": "{{REPO_NAME}}",
+        "owner": {
+          "id": "O_fixture",
+          "login": "{{REPO_OWNER}}"
+        }
+      },
+      "url": "https://github.com/{{REPO_OWNER}}/{{REPO_NAME}}/issues/43"
+    },
+    {
+      "id": "I_fixture43",
+      "number": 42,
+      "repository": {
+        "id": "R_fixture",
+        "name": "{{REPO_NAME}}",
+        "owner": {
+          "id": "O_fixture",
+          "login": "{{REPO_OWNER}}"
+        }
+      },
+      "url": "https://github.com/{{REPO_OWNER}}/{{REPO_NAME}}/issues/42"
+    },
+    {
+      "id": "I_other",
+      "number": 5,
+      "repository": {
+        "id": "R_other",
+        "name": "elsewhere",
+        "owner": {
+          "id": "O_other",
+          "login": "someone-else"
+        }
+      },
+      "url": "https://github.com/someone-else/elsewhere/issues/5"
+    }
+  ],
+  "headRefName": "fix/42-empty-scan",
+  "mergeCommit": {
+    "oid": "{{MERGE_101}}"
+  },
+  "mergedAt": "2026-08-01T09:00:00Z",
+  "number": 101,
+  "title": "fix: handle an empty list in scan()",
+  "url": "https://github.com/{{REPO_OWNER}}/{{REPO_NAME}}/pull/101"
+}

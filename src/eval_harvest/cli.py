@@ -25,9 +25,18 @@ from eval_harvest.brief import Brief
 from eval_harvest.candidate import Candidate, CandidateDict, CommentDict, Emittability, Violation
 from eval_harvest.dataset import Dataset, DatasetRefusalError
 from eval_harvest.emit import Emit, EmitRefusalError, EmitResult
-from eval_harvest.fix_survey import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FixSurvey, FixSurveyCacheError, FixSurveyThresholds
-from eval_harvest.forge import Forge, ForgeError, PullRequestFacts
+from eval_harvest.fix_candidate import FixCandidate, FixCandidateDict, FixCaptureError, FixFacts, FixIssue
+from eval_harvest.fix_survey import (
+    DEFAULT_PAGE_SIZE,
+    FIX_SURVEY_RELATIVE_PATH,
+    MAX_PAGE_SIZE,
+    FixSurvey,
+    FixSurveyCacheError,
+    FixSurveyThresholds,
+)
+from eval_harvest.forge import Forge, ForgeError, IssueFacts, PullRequestFacts
 from eval_harvest.forge_host import ForgeHost, ForgeHostError, ForgeKind, ForgeRemote
+from eval_harvest.gitcmd import GitCommandRunner
 from eval_harvest.gitlab import GitLab
 from eval_harvest.refusal_log import RefusalLog, RefusalRecordDict
 from eval_harvest.riskmap import RISK_MAP_FILENAME, RiskMap
@@ -488,6 +497,15 @@ class Cli:
             help="the dataset directory (holds risk-map.toml, candidates/)",
         )
         Cli.add_forge_argument(capture_parser)
+        capture_parser.add_argument(
+            "--type",
+            default="review",
+            choices=("review", "coding"),
+            help="the datapoint type: review (default) or coding (a merged fix becomes a coding task)",
+        )
+        capture_parser.add_argument(
+            "--branch", default="main", metavar="<name>", help="coding only: the mainline branch (default: main)"
+        )
 
     @staticmethod
     def add_forge_argument(parser: argparse.ArgumentParser) -> None:
@@ -1040,7 +1058,7 @@ class Cli:
         return pull_requests
 
     @classmethod
-    def handle_capture(cls, arguments: argparse.Namespace) -> int:
+    def handle_capture(cls, arguments: argparse.Namespace) -> int:  # noqa: PLR0911 — one return per mode and exit class (§9)
         """Capture one PR, or a whole batch from a ``survey --json`` payload (tech plan §9).
 
         Online: derives the repo from the clone's ``origin`` remote, fetches each PR's iterations,
@@ -1062,6 +1080,8 @@ class Cli:
                 file=sys.stderr,
             )
             return ExitCode.USAGE
+        if arguments.type == "coding":
+            return cls._handle_capture_coding(arguments)  # a coding capture needs no risk map (§9)
 
         datapoint_label = f"pr-{pr_number}" if from_survey is None else str(from_survey)
         risk_map = cls._load_risk_map_or_refuse(dataset, datapoint_label, json_mode=json_mode)
@@ -1299,6 +1319,303 @@ class Cli:
             )
             return None
         return risk_map
+
+    # ───────────────────────────── capture --type coding ─────────────────────────────
+
+    #: The ``next`` of a ``no-source-change`` coding refusal, single or batch.
+    _NO_SOURCE_CHANGE_NEXT = (
+        "this fix changes only test files; there is no source change for an agent to make — "
+        "pick another PR from `survey --type coding`"
+    )
+
+    @classmethod
+    def _handle_capture_coding(cls, arguments: argparse.Namespace) -> int:
+        """``capture --type coding``: one merged fix, or the ranked fixes of ``survey/fix-survey.json``.
+
+        No risk map, no pull-head fetch: the merge commit is on the mainline of the clone, and the
+        CLI reads one PR call plus one call for each linked issue from the forge (NFR-4).
+        """
+        clone: Path = arguments.clone
+        dataset: Path = arguments.dataset
+        remote = cls._forge_remote_or_report(clone, arguments, verb="capture")
+        if remote is None:
+            return ExitCode.USAGE
+        if arguments.from_survey is not None:
+            return cls._capture_coding_batch(
+                arguments.from_survey, arguments, remote=remote, clone=clone, dataset=dataset, json_mode=arguments.json
+            )
+        return cls._capture_coding_single(
+            arguments.pr, remote=remote, clone=clone, dataset=dataset, branch=arguments.branch, json_mode=arguments.json
+        )
+
+    @classmethod
+    def _capture_coding_single(  # noqa: PLR0913 — the PR, its forge/clone/dataset, the mainline branch, and the output mode
+        cls, pr_number: int, *, remote: ForgeRemote, clone: Path, dataset: Path, branch: str, json_mode: bool
+    ) -> int:
+        """Capture one merged fix; each refusal is printed in the four fields and kept in ``refusals/coding/``.
+
+        ``author_commits`` comes from the saved coding survey's ranked row when it has this PR, else it is
+        computed over ``branch`` with the survey's own definition.
+        """
+        key = f"fix-{pr_number}"
+        try:
+            facts = cls._fix_facts(
+                remote, pr_number, clone, author_commits=cls._cached_author_commits(dataset, pr_number), branch=branch
+            )
+            candidate_path = FixCandidate.write_to_dataset(facts, repo=remote.project_path, clone=clone, dataset_dir=dataset)
+        except ForgeError as error:
+            next_ = "the forge call failed; check `gh auth status` (or `glab auth status`) and run capture again"
+            return cls._refuse_coding_capture(
+                dataset, "forge-unavailable", key, str(error), next_, exit_code=ExitCode.RUNTIME_UNAVAILABLE, json_mode=json_mode
+            )
+        except FixCaptureError as error:
+            next_ = cls._fix_capture_next(error, remote=remote, clone=clone)
+            return cls._refuse_coding_capture(
+                dataset, error.check, key, error.offending, next_, exit_code=ExitCode.REFUSAL, json_mode=json_mode
+            )
+        except SurveyError as error:
+            print(f"eval-harvest capture: {error}; pass --branch <name> to name the mainline branch", file=sys.stderr)
+            return ExitCode.USAGE
+        RefusalLog.clear(dataset, "coding", key)
+        cls._report_fix_capture(candidate_path, FixCandidate.load(candidate_path), json_mode=json_mode)
+        return ExitCode.SUCCESS
+
+    # The FR-2 four fields plus the dataset, the exit class, and the output mode; the count is the record's shape.
+    @classmethod
+    def _refuse_coding_capture(  # noqa: PLR0913
+        cls, dataset: Path, check: str, datapoint: str, offending: str, next_: str, *, exit_code: int, json_mode: bool
+    ) -> int:
+        """Keep one coding capture refusal in ``refusals/coding/`` (FR-33), then print it and return ``exit_code``."""
+        record = RefusalRecordDict(check=check, datapoint=datapoint, offending=offending, next=next_, verb="capture")
+        RefusalLog.write(dataset, "coding", record)
+        return cls.refuse(
+            check=check, datapoint=datapoint, offending=offending, next_=next_, exit_code=exit_code, json_mode=json_mode
+        )
+
+    @classmethod
+    def _fix_capture_next(cls, error: FixCaptureError, *, remote: ForgeRemote, clone: Path) -> str:
+        """The one action that addresses a ``fix-base-unrecoverable`` or ``no-source-change`` refusal."""
+        if error.check == "no-source-change":
+            return cls._NO_SOURCE_CHANGE_NEXT
+        return (
+            f"run `git fetch {remote.git_remote}` in {clone} so the clone has the merge commit, then capture again; "
+            "or pick another PR from `survey --type coding`"
+        )
+
+    @staticmethod
+    def _cached_author_commits(dataset: Path, pr_number: int) -> int | None:
+        """``author_commits`` of the PR's ranked row in ``survey/fix-survey.json``, or ``None`` without one."""
+        try:
+            document = FixSurvey.read_cache(dataset)
+        except FixSurveyCacheError:
+            return None
+        row = next((row for row in document["ranked"] if isinstance(row, dict) and row.get("number") == pr_number), None)
+        if row is None or not isinstance(row.get("author_commits"), int):
+            return None
+        return int(row["author_commits"])
+
+    @classmethod
+    def _capture_coding_batch(  # noqa: PLR0913 — the cache file, the parsed flags, the shared forge/clone/dataset, and the output mode
+        cls, from_survey: Path, arguments: argparse.Namespace, *, remote: ForgeRemote, clone: Path, dataset: Path, json_mode: bool
+    ) -> int:
+        """Capture the ranked rows of the dataset's coding survey in rank order; one refusal does not stop the rest."""
+        document = cls._coding_survey_cache_or_report(from_survey, dataset)
+        if document is None:
+            return ExitCode.USAGE
+        targets = cls._coding_capture_targets(document, arguments, from_survey, dataset, json_mode=json_mode)
+        if targets is None:
+            return ExitCode.REFUSAL  # unknown-pr or no-clean-pr was already emitted
+        report = Batch.run(
+            targets,
+            lambda row: cls._capture_coding_item(
+                int(row["number"]), int(row["author_commits"]), remote=remote, clone=clone, dataset=dataset
+            ),
+            lambda row: (f"fix-{row['number']}", int(row["number"])),
+            on_progress=cls._batch_progress,
+        )
+        cls._report_batch(report, dataset=dataset, success_noun="captured", json_mode=json_mode)
+        return ExitCode.SUCCESS if report.clean else ExitCode.REFUSAL
+
+    @staticmethod
+    def _coding_survey_cache_or_report(from_survey: Path, dataset: Path) -> dict[str, Any] | None:
+        """The dataset's coding survey when ``--from-survey`` names it, else ``None`` after a usage message."""
+        expected = dataset / FIX_SURVEY_RELATIVE_PATH
+        problem = ""
+        document: dict[str, Any] | None = None
+        if from_survey.resolve() != expected.resolve():
+            problem = f"{from_survey} is not {expected}"
+        else:
+            try:
+                document = FixSurvey.read_cache(dataset)
+            except FixSurveyCacheError as error:
+                problem = str(error)
+        if document is None:
+            print(
+                "eval-harvest capture: `--type coding --from-survey` needs `<dataset>/survey/fix-survey.json` from "
+                f"`survey --type coding` ({problem})",
+                file=sys.stderr,
+            )
+        return document
+
+    @classmethod
+    def _coding_capture_targets(
+        cls, document: dict[str, Any], arguments: argparse.Namespace, from_survey: Path, dataset: Path, *, json_mode: bool
+    ) -> list[dict[str, Any]] | None:
+        """The ranked rows to capture, in rank order, narrowed by ``--pr`` and ``--limit``; ``None`` after a refusal.
+
+        ``--pr`` is checked against the ranked and the excluded rows together, so a typo refuses
+        ``unknown-pr`` before any forge call; a PR that is only excluded is never a target.
+        """
+        ranked: list[dict[str, Any]] = sorted(document["ranked"], key=lambda row: int(row["rank"]))
+        pr_filter: list[int] = arguments.pr_filter
+        if pr_filter:
+            present = {int(row["number"]) for row in [*document["ranked"], *document["excluded"]]}
+            unknown = sorted({pr for pr in pr_filter if pr not in present})
+            if unknown:
+                cls.refuse(
+                    check="unknown-pr",
+                    datapoint=str(from_survey),
+                    offending=f"--pr named {unknown}, not in the coding survey",
+                    next_="pass --pr with a number the coding survey lists, or drop --pr to capture every ranked PR",
+                    exit_code=ExitCode.REFUSAL,
+                    json_mode=json_mode,
+                )
+                return None
+            ranked = [row for row in ranked if int(row["number"]) in set(pr_filter)]
+        if arguments.limit is not None:
+            ranked = ranked[: max(arguments.limit, 0)]
+        if not ranked:
+            cls.refuse(
+                check="no-clean-pr",
+                datapoint=str(from_survey),
+                offending="the coding survey has no ranked PR to capture (all excluded, or --pr/--limit excluded them)",
+                next_=(
+                    f"run `eval-harvest survey --type coding --dataset {shlex.quote(str(dataset))} --excluded` to see why each "
+                    "PR is excluded, or widen --pr/--limit"
+                ),
+                exit_code=ExitCode.REFUSAL,
+                json_mode=json_mode,
+            )
+            return None
+        return ranked
+
+    @classmethod
+    def _capture_coding_item(
+        cls, pr_number: int, author_commits: int, *, remote: ForgeRemote, clone: Path, dataset: Path
+    ) -> ItemResult:
+        """Capture one ranked fix for the batch: each refusal is an item result, kept in ``refusals/coding/``."""
+        key = f"fix-{pr_number}"
+        try:
+            facts = cls._fix_facts(remote, pr_number, clone, author_commits=author_commits, branch="")
+            candidate_path = FixCandidate.write_to_dataset(facts, repo=remote.project_path, clone=clone, dataset_dir=dataset)
+        except ForgeError as error:
+            next_ = (
+                "the forge call failed for this PR; the batch continued — re-run `capture <pr> --type coding` alone to inspect it"
+            )
+            return cls._refuse_coding_item(dataset, pr_number, "forge-unavailable", str(error), next_)
+        except FixCaptureError as error:
+            return cls._refuse_coding_item(
+                dataset, pr_number, error.check, error.offending, cls._fix_capture_next(error, remote=remote, clone=clone)
+            )
+        RefusalLog.clear(dataset, "coding", key)
+        candidate = FixCandidate.load(candidate_path)
+        return ItemResult.success(
+            key, pr_number, payload=cls._fix_capture_payload(candidate_path, candidate), detail=f"→ {candidate_path}"
+        )
+
+    @staticmethod
+    def _refuse_coding_item(dataset: Path, pr_number: int, check: str, offending: str, next_: str) -> ItemResult:
+        """One refused batch item, kept in ``refusals/coding/`` as single mode keeps it."""
+        key = f"fix-{pr_number}"
+        RefusalLog.write(
+            dataset, "coding", RefusalRecordDict(check=check, datapoint=key, offending=offending, next=next_, verb="capture")
+        )
+        return ItemResult.refuse(key, pr_number, check=check, offending=offending, next_=next_)
+
+    @classmethod
+    def _fix_facts(cls, remote: ForgeRemote, pr_number: int, clone: Path, *, author_commits: int | None, branch: str) -> FixFacts:
+        """Read one merged fix and its linked issues from the forge ``remote`` names — the one place this branches on it.
+
+        One PR call, then one call for each linked issue (NFR-4); no ``git fetch``. When ``author_commits``
+        is ``None`` it is computed over ``branch``'s mainline with :meth:`FixSurvey.author_commits`.
+        """
+        if remote.kind is ForgeKind.GITLAB:
+            pull_request = GitLab.fetch_fix_merge_request(remote, pr_number)
+        else:
+            pull_request = Forge.fetch_fix_pull_request(remote.project_path, pr_number)
+        issues = [cls._fetch_fix_issue(remote, number) for number in cls._linked_issue_numbers(pull_request)]
+        merge_commit = str(pull_request["merge_commit"])
+        if author_commits is None:
+            author_commits = cls._computed_author_commits(clone, merge_commit, branch)
+        return FixFacts(
+            pr_number=pr_number,
+            pr_url=str(pull_request["url"]) or remote.pull_request_url(pr_number),
+            pr_title=str(pull_request["title"]),
+            pr_body=str(pull_request["body"] or ""),
+            merge_commit=merge_commit,
+            merged_at=str(pull_request["merged_at"]),
+            issues=tuple(
+                FixIssue(issue.number, issue.url, issue.title, issue.body) for issue in issues if not issue.is_pull_request
+            ),
+            author_commits=author_commits,
+        )
+
+    @staticmethod
+    def _linked_issue_numbers(pull_request: dict[str, Any]) -> list[int]:
+        """The forge's closing-issue numbers, or — when it gives none — the numbers in the title, body, and branch."""
+        numbers = [int(number) for number in pull_request["closing_issue_numbers"]]
+        if not numbers:
+            candidates = Survey.issue_candidates(pull_request["title"], pull_request["body"], pull_request["head_ref_name"])
+            numbers = [int(number) for number in candidates]
+        return sorted(set(numbers))
+
+    @staticmethod
+    def _fetch_fix_issue(remote: ForgeRemote, number: int) -> IssueFacts:
+        """One linked issue from the forge ``remote`` names (one call)."""
+        if remote.kind is ForgeKind.GITLAB:
+            return GitLab.fetch_issue(remote, number)
+        return Forge.fetch_issue(remote.project_path, number)
+
+    @staticmethod
+    def _computed_author_commits(clone: Path, merge_commit: str, branch: str) -> int:
+        """``author_commits`` with the survey's definition, for a PR the saved coding survey does not rank."""
+        if not merge_commit:
+            return 0
+        _, parents_line = GitCommandRunner.git(clone, "rev-list", "--parents", "-n", "1", merge_commit)
+        parents = parents_line.split()[1:]
+        return FixSurvey.author_commits(clone, Survey.mainline(clone, branch), merge_commit, parents)
+
+    @classmethod
+    def _report_fix_capture(cls, candidate_path: Path, candidate: FixCandidateDict, *, json_mode: bool) -> None:
+        """Print the candidate path, the slots to fill, and the ``brief`` command (human or ``--json``)."""
+        if json_mode:
+            print(json.dumps(cls._fix_capture_payload(candidate_path, candidate)))
+            return
+        print(str(candidate_path))
+        print("slots to fill:")
+        for violation in FixCandidate.validate_filled(candidate):
+            print(f"  - {violation.pointer}")
+        print(f"next: {cls._fix_capture_next_command(candidate_path)}")
+
+    @classmethod
+    def _fix_capture_payload(cls, candidate_path: Path, candidate: FixCandidateDict) -> dict[str, Any]:
+        """The single-item ``capture --type coding --json`` object, reused as a batch item's payload."""
+        return {
+            "candidate": str(candidate_path),
+            "pr_number": candidate["pr_number"],
+            "base_commit": candidate["base_commit"],
+            "merge_commit": candidate["merge_commit"],
+            "source_paths": candidate["source_paths"],
+            "test_paths": candidate["test_paths"],
+            "issues": [issue["number"] for issue in candidate["issues"]],
+            "unfilled": [violation.pointer for violation in FixCandidate.validate_filled(candidate)],
+            "next": cls._fix_capture_next_command(candidate_path),
+        }
+
+    @staticmethod
+    def _fix_capture_next_command(candidate_path: Path) -> str:
+        """``eval-harvest brief <candidate>``, the path shell-quoted because an agent pastes it."""
+        return f"eval-harvest brief {shlex.quote(str(candidate_path))}"
 
     @classmethod
     def handle_brief(cls, arguments: argparse.Namespace) -> int:

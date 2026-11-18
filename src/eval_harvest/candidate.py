@@ -185,7 +185,7 @@ def patch_relpath(pr_number: int, iteration_index: int) -> str:
     return f"patches/pr-{pr_number}-iter{iteration_index}.patch"
 
 
-def _newline_terminated(diff: str) -> bytes:
+def newline_terminated(diff: str) -> bytes:
     """The diff's UTF-8 bytes with a trailing newline, appended only when one is missing.
 
     A patch is a line-oriented format and ``git apply`` refuses a hunk whose final line is
@@ -428,7 +428,7 @@ class Candidate:
                 continue
             patch_path = dataset_dir / patch_relpath(facts.pr_number, index)
             patch_path.parent.mkdir(parents=True, exist_ok=True)
-            patch_path.write_bytes(_newline_terminated(iteration.diff))
+            patch_path.write_bytes(newline_terminated(iteration.diff))
 
     # ───────────────────────────── slots the agent must fill ─────────────────────────────
 

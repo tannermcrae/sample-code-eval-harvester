@@ -55,6 +55,12 @@ _UNORDERED_RANK = 1 << 30
 _UNBOUND_ITERATION = -1
 
 
+#: The ``gh pr view --json`` fields the coding capture reads. ``closingIssuesReferences`` is in gh 2.92's
+#: field list, and its entries carry ``number``, ``url``, and ``repository {name, owner {login}}``
+#: (checked against ``strands-agents/evals#338``).
+_FIX_PULL_REQUEST_FIELDS = "number,title,body,url,mergeCommit,mergedAt,headRefName,closingIssuesReferences"
+
+
 class ForgeError(RuntimeError):
     """A forge fetch could not complete — a ``gh``/``git`` call failed. Carries the underlying message."""
 
@@ -145,6 +151,52 @@ class Forge:
         comments = cls._fetch_api_list(f"repos/{repo}/pulls/{pr_number}/comments")
         timeline = cls._fetch_api_list(f"repos/{repo}/issues/{pr_number}/timeline")
         return cls.reconstruct_facts(pr_number, clone, base_ref, reviews=reviews, comments=comments, timeline=timeline)
+
+    @classmethod
+    def fetch_fix_pull_request(cls, repo: str, pr_number: int) -> dict[str, Any]:
+        """Read one merged PR for the coding capture with a single ``gh pr view`` call (NFR-4).
+
+        Returns the forge-neutral fix dict (``number``, ``title``, ``body``, ``url``, ``merge_commit``,
+        ``merged_at``, ``head_ref_name``, ``closing_issue_numbers``) that ``GitLab.fetch_fix_merge_request``
+        also returns. ``closingIssuesReferences`` can name an issue in another repository; only the
+        references to ``repo`` are kept, because the issue is then read from ``repo``. A non-zero exit or a
+        body that is not a JSON object raises ``ForgeError``.
+        """
+        code, out, err = GitCommandRunner.gh(["pr", "view", str(pr_number), "--json", _FIX_PULL_REQUEST_FIELDS], repo=repo)
+        if code != 0:
+            raise ForgeError(f"gh pr view {pr_number} --repo {repo} failed ({code}): {err or out}")
+        try:
+            loaded = json.loads(out)
+        except json.JSONDecodeError as error:
+            raise ForgeError(f"gh pr view {pr_number} returned a body that is not JSON: {error}") from error
+        if not isinstance(loaded, dict):
+            raise ForgeError(f"gh pr view {pr_number} returned {type(loaded).__name__}, expected a JSON object")
+        return {
+            "number": int(loaded.get("number") or pr_number),
+            "title": str(loaded.get("title") or ""),
+            "body": str(loaded.get("body") or ""),  # gh gives null for an empty body
+            "url": str(loaded.get("url") or ""),
+            "merge_commit": str((loaded.get("mergeCommit") or {}).get("oid") or ""),
+            "merged_at": str(loaded.get("mergedAt") or ""),
+            "head_ref_name": str(loaded.get("headRefName") or ""),
+            "closing_issue_numbers": cls._closing_issue_numbers(loaded.get("closingIssuesReferences") or [], repo),
+        }
+
+    @staticmethod
+    def _closing_issue_numbers(references: list[dict[str, Any]], repo: str) -> list[int]:
+        """The numbers of the closing references that are issues of ``repo``, sorted and without repeats.
+
+        A reference without a ``repository`` is kept: the field is the only way to tell a cross-repository one.
+        """
+        numbers: set[int] = set()
+        for reference in references:
+            repository = reference.get("repository") or {}
+            owner = str((repository.get("owner") or {}).get("login") or "")
+            name_with_owner = f"{owner}/{repository.get('name') or ''}"
+            if repository and name_with_owner.lower() != repo.lower():
+                continue
+            numbers.add(int(reference["number"]))
+        return sorted(numbers)
 
     @classmethod
     def fetch_pull_request_head(cls, clone: Path, pr_number: int, remote: str = "origin") -> None:

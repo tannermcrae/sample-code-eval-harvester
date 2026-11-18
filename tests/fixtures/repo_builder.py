@@ -205,6 +205,28 @@ _FIX_LAST_SCENARIO: tuple[int, dict[str, _FileChange]] = (
     {"src/retry.py": "RETRIES = 3\nDELAY = 1\nBACKOFF = 2\n", "tests/test_retry.py": _THREE_LINE_TEST},
 )
 
+#: The coding-capture scenarios (C-1), committed after PR 114 only when ``build_fix_history`` is asked for
+#: them: one more mainline commit changes the B-1 golden's ``mainline_commits``, so the B-1 tests build
+#: without them. 115 deletes a source file; 116 interleaves source and test files in path order.
+_FIX_CAPTURE_SCENARIOS: tuple[tuple[int, dict[str, _FileChange]], ...] = (
+    (
+        115,
+        {
+            "src/tiny.py": None,
+            "src/scan.py": "def scan(items):\n    return sum(items or [])\n",
+            "tests/test_scan.py": _THREE_LINE_TEST,
+        },
+    ),
+    (
+        116,
+        {
+            "lib/alpha.py": "ALPHA = 1\n",
+            "lib/beta_test.py": _THREE_LINE_TEST,
+            "lib/gamma.py": "GAMMA = 3\n",
+        },
+    ),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class FixHistoryFixture:
@@ -507,12 +529,13 @@ class RepoBuilder:
     # ───────────────────────────── coding-survey history (coding-eval-harvest B-1) ─────────────────────────────
 
     @classmethod
-    def build_fix_history(cls, root: Path) -> FixHistoryFixture:
+    def build_fix_history(cls, root: Path, *, capture_scenarios: bool = False) -> FixHistoryFixture:
         """A mainline of merged fixes, one per coding-survey scenario, and a ``--no-local`` clone of it.
 
         Each scenario in :data:`_FIX_SCENARIOS` is one squash commit on ``main`` at a fixed date; PR 113 is a
         true ``git merge --no-ff`` of a branch written by a second author, so the merge commit's author is
         not the fix's author. PRs 108 (open) and 109 (merged, no merge commit) need no commit at all.
+        ``capture_scenarios`` appends :data:`_FIX_CAPTURE_SCENARIOS` after PR 114; the earlier SHAs do not change.
         """
         origin = cls._init_origin(root)
         substitutions: dict[str, str] = {}
@@ -523,6 +546,9 @@ class RepoBuilder:
         cls._commit_true_merge(origin, day, substitutions)
         day += 1
         cls._record_fix_commit(origin, _FIX_LAST_SCENARIO[0], _FIX_LAST_SCENARIO[1], None, day, substitutions)
+        for number, files in _FIX_CAPTURE_SCENARIOS if capture_scenarios else ():
+            day += 1
+            cls._record_fix_commit(origin, number, files, None, day, substitutions)
         clone = cls._clone(origin, root / "clone")
         return FixHistoryFixture(
             origin=origin,

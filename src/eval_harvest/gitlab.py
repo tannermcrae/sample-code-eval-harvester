@@ -87,6 +87,20 @@ query($fullPath: ID!, $iid: String!, $first: Int!, $after: String) {
 }
 """
 
+#: One merged MR's facts, for the coding capture. GitLab's GraphQL ``MergeRequest`` has no closing-issues
+#: field (``closingIssues`` and ``closesIssues`` were both refused as undefined by gitlab.com), so the
+#: linked issues come from the text fallback. The field names were checked against a live gitlab.com
+#: response (``tests/fixtures/glab/recorded/mr-3978-fix.json``).
+FIX_CAPTURE_QUERY = """
+query($fullPath: ID!, $iid: String!) {
+  project(fullPath: $fullPath) {
+    mergeRequest(iid: $iid) {
+      iid title description webUrl state mergedAt mergeCommitSha squashOnMerge diffHeadSha sourceBranch
+    }
+  }
+}
+"""
+
 #: One issue's text, for the coding capture (FR-13). ``iid`` is a ``String`` in GitLab's GraphQL, so it
 #: is passed with ``-f``, like ``CAPTURE_QUERY``'s. The field names were checked against a live
 #: gitlab.com response (``tests/fixtures/glab/recorded/issue.json``).
@@ -274,6 +288,30 @@ class GitLab:
                 break
             cursor = merge_request["notes"]["pageInfo"]["endCursor"]
         return {**merge_request, "notes": {"nodes": notes}}
+
+    @classmethod
+    def fetch_fix_merge_request(cls, remote: ForgeRemote, iid: int) -> dict[str, Any]:
+        """Read one merged MR for the coding capture with a single ``glab api graphql`` call (NFR-4).
+
+        Reshaped to the same keys as ``Forge.fetch_fix_pull_request``. The merge commit is
+        :meth:`_integration_revision`'s answer, so a squash MR without a ``mergeCommitSha`` gives ``""``
+        and the capture refuses it rather than build from a SHA that never landed. ``closing_issue_numbers``
+        is always empty (see :data:`FIX_CAPTURE_QUERY`).
+        """
+        variables = ["-f", f"fullPath={remote.project_path}", "-f", f"iid={iid}"]
+        node: dict[str, Any] | None = cls._run_graphql(remote, FIX_CAPTURE_QUERY, variables).get("mergeRequest")
+        if node is None:
+            raise ForgeError(f"{remote.host} has no merge request !{iid} in {remote.project_path}")
+        return {
+            "number": int(node.get("iid") or iid),
+            "title": str(node.get("title") or ""),
+            "body": str(node.get("description") or ""),
+            "url": str(node.get("webUrl") or ""),
+            "merge_commit": cls._integration_revision(node),
+            "merged_at": str(node.get("mergedAt") or ""),
+            "head_ref_name": str(node.get("sourceBranch") or ""),
+            "closing_issue_numbers": [],
+        }
 
     @classmethod
     def fetch_issue(cls, remote: ForgeRemote, issue_iid: int) -> IssueFacts:

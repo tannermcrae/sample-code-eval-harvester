@@ -539,7 +539,7 @@ class Verify:
         rejects an unterminated final hunk, and the artefact the image build consumes is the stored file
         itself; if this check repaired the patch first it could go green while the image build's `RUN git
         apply` failed on the same corrupt bytes. The terminating newline belongs to the stored bytes
-        (`candidate._newline_terminated`), so this check is allowed to see — and reject — a malformed patch.
+        (`candidate.newline_terminated`), so this check is allowed to see — and reject — a malformed patch.
         """
         # The patch path is passed *absolute*. `GitCommandRunner.git` shells `git -C <clone>`, so git's
         # working directory is the clone; a caller-relative `patch_path` (e.g. the `my-dataset/tasks/…`

@@ -4,7 +4,7 @@ title: "[Capture] Add the coding candidate and capture --type coding"
 summary: "Make the coding candidate file and its checks, and let `capture --type coding` write it from one PR or a survey."
 feature: coding-eval-harvest
 workstream: Capture
-status: in-progress
+status: done
 complexity: L
 merges: [C-1, C-2]
 implements: [FR-12, FR-13, FR-14, FR-16, FR-17, FR-21, FR-22, FR-33, NFR-2, NFR-4]
@@ -319,20 +319,20 @@ Use `RepoBuilder.build_fix_history` (B-1, extended in step 16).
 
 ## Acceptance Criteria
 
-- [ ] `src/eval_harvest/fix_candidate.py` defines the schema of tech plan §8 in the same field order.
-- [ ] `write_to_dataset` writes `candidates/fix-<n>.json`, `patches/fix-<n>/source.patch`, and `patches/fix-<n>/tests.patch`, and the two patches together have each section of `git diff <base> <merge>` one time.
-- [ ] The base is the first parent of the merge commit.
-- [ ] After a capture, every judgment slot is empty and `validate_filled` lists each one.
-- [ ] `validate_recipe` refuses each form in step 14.
-- [ ] `fix_candidate.py` imports no forge module and makes no network call.
-- [ ] `capture <pr> --type coding` writes the coding candidate and the two patches, and prints `next: eval-harvest brief <path>`.
-- [ ] `capture --type coding --from-survey survey/fix-survey.json` captures the ranked PRs in rank order, with `--pr` and `--limit`.
-- [ ] Each refusal in the table above has the four fields and the exit code in the table. No candidate is written on `fix-base-unrecoverable` or `no-source-change`.
-- [ ] A coding capture makes one PR call plus one call for each linked issue, and no `git fetch`.
-- [ ] Each coding refusal is in `<dataset>/refusals/coding/`.
-- [ ] Every existing `capture` command without `--type` gives the same bytes as before.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
+- [x] `src/eval_harvest/fix_candidate.py` defines the schema of tech plan §8 in the same field order.
+- [x] `write_to_dataset` writes `candidates/fix-<n>.json`, `patches/fix-<n>/source.patch`, and `patches/fix-<n>/tests.patch`, and the two patches together have each section of `git diff <base> <merge>` one time.
+- [x] The base is the first parent of the merge commit.
+- [x] After a capture, every judgment slot is empty and `validate_filled` lists each one.
+- [x] `validate_recipe` refuses each form in step 14.
+- [x] `fix_candidate.py` imports no forge module and makes no network call.
+- [x] `capture <pr> --type coding` writes the coding candidate and the two patches, and prints `next: eval-harvest brief <path>`.
+- [x] `capture --type coding --from-survey survey/fix-survey.json` captures the ranked PRs in rank order, with `--pr` and `--limit`.
+- [x] Each refusal in the table above has the four fields and the exit code in the table. No candidate is written on `fix-base-unrecoverable` or `no-source-change`.
+- [x] A coding capture makes one PR call plus one call for each linked issue, and no `git fetch`.
+- [x] Each coding refusal is in `<dataset>/refusals/coding/`.
+- [x] Every existing `capture` command without `--type` gives the same bytes as before.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6). `tests/unit/test_no_model_client.py` stays green (FR-19).
 
 ## Out Of Scope
 
@@ -364,3 +364,35 @@ Use `RepoBuilder.build_fix_history` (B-1, extended in step 16).
 
 **Blocked by:** [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md), [B-1](B-1-add-the-paged-coding-survey.md)
 **Blocks:** [C-2](C-2-add-coding-views-to-brief-show-and-annotate.md), [D-2](D-2-assemble-and-promote-coding-tasks-with-emit-kind-fix.md), [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `coding-candidate-capture-c-1`  ·  **Commit:** the `[C-1]` commit on `main` (squashed; this log ships inside it)
+
+**What was implemented:** A new `FixCandidate` module writes `candidates/fix-<n>.json` with the §8 fields in the §8 order, plus `patches/fix-<n>/source.patch` and `tests.patch`. The base is the first parent of the merge commit. The module also has the four never-raising validators: facts, filled slots, hidden-test files, and the recipe. `capture --type coding` reads one PR (or MR) and each linked issue from the forge, then writes the candidate. It works for a single PR or for the ranked rows of `survey/fix-survey.json`. It needs no risk map and makes no `git fetch`. Every refusal is written to `refusals/coding/`.
+
+**Files changed:**
+- `src/eval_harvest/fix_candidate.py` — new: schema, `FixFacts`/`FixIssue`, `FixCaptureError`, path helpers, `write_to_dataset`, `scaffold`, JSON round-trip, `datapoint_type_of`, and the four validators.
+- `src/eval_harvest/candidate.py` — `_newline_terminated` renamed to `newline_terminated` (no byte change); `verify.py` docstring reference updated.
+- `src/eval_harvest/forge.py` — `Forge.fetch_fix_pull_request` (one `gh pr view` call).
+- `src/eval_harvest/gitlab.py` — `FIX_CAPTURE_QUERY` and `GitLab.fetch_fix_merge_request` (one GraphQL call).
+- `src/eval_harvest/fix_survey.py` — `FixSurvey.author_commits` extracted from `survey_one`, with no behavior change.
+- `src/eval_harvest/cli.py` — `--type`/`--branch` on `capture`; the coding dispatch before the risk-map guard; the single, batch, item, facts, and report methods.
+- `tests/fixtures/repo_builder.py` — `build_fix_history(capture_scenarios=True)` appends PR 115 (deletes a source file) and PR 116 (interleaved source/test files).
+- `tests/fixtures/gh/fix_capture/` — the recorded `gh pr view` of strands-agents/evals#338, a PR-101 template, and two issue payloads. `tests/fixtures/glab/recorded/mr-3978-fix.json` — a live gitlab.com `FIX_CAPTURE_QUERY` response.
+- `tests/integration/test_fix_candidate.py` (42 tests) and `tests/integration/test_capture_coding.py` (27 tests).
+
+**Acceptance criteria:** Each one is met by a named test, and each guard was broken on purpose and seen to go red, then reverted. The guards tested this way: first parent → `parents[-1]`; the trailing-backslash check; the path-traversal check; `>` → `>=` in the body cut; the issue sort; the fail-to-pass check; the `is_pull_request` filter; the text fallback; the refusal clear; the computed `author_commits`; the `unknown-pr` check; excluded rows as targets; the cache-path check. The "no forge module" criterion is an AST test of the direct imports. "Same bytes without `--type`" is met because the review path is unchanged and `test_capture_output_byte_identical_twice` and the full suite pass. `mise run check` is green: 712 passed, 86 skipped (Harbor, e2e). E2E: the built CLI (`uv build`, `uv run eval-harvest capture 338 --type coding`) on a real clone of strands-agents/evals exited 0. Its base was `0bf1252…` (the first parent of `cc0a391…`), issue #337 came out with `body_truncated: true`, and both patches pass `git apply --check` at the base.
+
+**Deviations from the task:**
+- Both `[TODO: verify]` items were checked against the live services. gh 2.92.0 lists `closingIssuesReferences`, and each entry carries `number`, `url`, and `repository {name, owner {login}}`. GitLab GraphQL `MergeRequest` has no closing-issues field: both `closingIssues` and `closesIssues` were refused as undefined, so GitLab always uses the text fallback. A git CI matrix version was not found, so it was not checked; local git is 2.54.
+- `fetch_fix_pull_request` keeps only the closing references that point to the same repository. Without that filter, a cross-repository "Fixes other/repo#5" would fetch issue #5 of *this* repository.
+- `write_to_dataset` also checks that the first parent itself is in the clone (one extra `rev-parse`), so a shallow clone gives `fix-base-unrecoverable` and not a git error. A failed `git diff` gives the same refusal.
+- `build_fix_history` takes a `capture_scenarios` flag instead of always appending PRs 115 and 116. One more mainline commit would change the B-1 golden's `mainline_commits`, which the task forbids.
+- `_capture_coding_single` and `_fix_facts` take a `branch` argument (and `_fix_facts` an `author_commits` argument), because single mode must compute `author_commits` over `--branch`. A missing branch (`SurveyError`) is a usage error (exit 2). The task table does not list this case.
+- `fix_candidate.py` has its own short `-z` numstat parser. `FixSurvey.parse_numstat` is in `fix_survey`, which imports `survey` → `forge`, and the task allows only the `candidate`/`patchsplit`/`gitcmd` imports.
+- `cli.py` now imports `GitCommandRunner` (one `rev-list --parents` for the computed `author_commits`).
+
+**Follow-ups noticed but not done:**
+- Move the numstat parser into `patchsplit.py` so that `fix_survey` and `fix_candidate` share one copy.
+- `git diff` is run without `--binary`, so a fix that changes a binary source file (fixture PR 112) gives a `source.patch` that `git apply` cannot apply. D-2 or E-1 should decide whether to refuse such a fix or to use `--binary`.

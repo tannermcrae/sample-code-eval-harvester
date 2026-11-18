@@ -1,0 +1,8 @@
+{
+  "url": "https://api.github.com/repos/{{REPO_OWNER}}/{{REPO_NAME}}/issues/42",
+  "html_url": "https://github.com/{{REPO_OWNER}}/{{REPO_NAME}}/issues/42",
+  "number": 42,
+  "title": "scan() crashes on an empty list",
+  "body": "Calling scan([]) raises instead of returning 0.",
+  "state": "closed"
+}

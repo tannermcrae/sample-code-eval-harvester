@@ -171,16 +171,25 @@ class FixSurvey:
             reasons = {"no-integration-commit", "bot-author"} if bot else {"no-integration-commit"}
             return cls._facts_row(pull_request, integration=integration, excluded_by=cls._ordered_reasons(reasons))
         counts = cls._split_counts(cls._numstat(clone, ranges.parents[0], integration))
-        author_email = cls._author_email(clone, integration, ranges.parents, commits)
         excluded_by = cls._content_reasons(counts, thresholds, bot=bot)
         return cls._facts_row(
             pull_request,
             integration=integration,
             parents=len(ranges.parents),
             counts=counts,
-            author_commits=cls._author_commit_count(commits, author_email, integration),
+            author_commits=cls.author_commits(clone, commits, integration, ranges.parents),
             excluded_by=excluded_by,
         )
+
+    @classmethod
+    def author_commits(cls, clone: Path, commits: list[Commit], integration: str, parents: list[str]) -> int:
+        """How many mainline commits the fix's author wrote up to the integration commit (0 when unknown).
+
+        The one definition: the survey row and ``capture --type coding`` (C-1) both call it, so the
+        candidate's ``author_commits`` equals the survey row's (tech plan §8). At most one git call.
+        """
+        author_email = cls._author_email(clone, integration, parents, commits)
+        return cls._author_commit_count(commits, author_email, integration)
 
     @staticmethod
     def _numstat(clone: Path, first_parent: str, integration: str) -> list[_PathLines]:
