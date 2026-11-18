@@ -93,6 +93,15 @@ class PatchSplit:
         return header.rsplit(_PLAIN_NEW_SIDE, 1)[-1]
 
     @classmethod
+    def section_paths(cls, unified_diff: str) -> tuple[str, ...]:
+        """The ``b/`` path of each ``diff --git`` section of ``unified_diff``, sorted and unique.
+
+        A path with two sections (a rename with a mode change, say) is listed once, and the order does
+        not depend on the order of the sections, so a caller that builds tokens from it is deterministic.
+        """
+        return tuple(sorted({cls.section_path(section) for section in cls.file_sections(unified_diff)}))
+
+    @classmethod
     def split(cls, unified_diff: str) -> SplitPatch:
         """Put each file section of ``unified_diff`` into exactly one of the two patches.
 

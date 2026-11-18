@@ -147,6 +147,90 @@ def test_control_token_present_lets_clean_scan_pass(tmp_path: Path) -> None:
     assert report.failures == [], f"clean scan unexpectedly failed: {[(f.check, f.detail) for f in report.failures]}"
 
 
+#: A coding oracle patch: one context line and two added lines, each long enough to be a fragment.
+_ORACLE_PATCH = """diff --git a/src/sum_module.py b/src/sum_module.py
+--- a/src/sum_module.py
++++ b/src/sum_module.py
+@@ -1,2 +1,3 @@
+ def unchanged_context_helper():
++    guard_against_empty_list_input()
++    return compute_the_running_total()
+"""
+
+
+def _coding_task_with_oracle(tmp_path: Path, agent_text: str) -> Path:
+    """A task with `solution/oracle.patch`, a `solution/notes.txt` that is not an answer source, and `instruction.md`."""
+    task_dir = tmp_path / "task"
+    (task_dir / "solution").mkdir(parents=True)
+    (task_dir / "solution" / "oracle.patch").write_text(_ORACLE_PATCH, encoding="utf-8")
+    (task_dir / "solution" / "notes.txt").write_text("a_line_that_only_the_default_sources_mine\n", encoding="utf-8")
+    (task_dir / "instruction.md").write_text(f"{agent_text}\n{CONTROL_TOKEN}\n", encoding="utf-8")
+    return task_dir
+
+
+def test_answer_sources_mine_added_patch_lines(tmp_path: Path) -> None:
+    """An added line of a `.patch` answer source in an agent-visible file is a leak (E-1, FR-25)."""
+    task_dir = _coding_task_with_oracle(tmp_path, "hint: guard_against_empty_list_input()")
+    report = Seal.scan_agent_visible(task_dir, tokens=[], control_token=CONTROL_TOKEN, answer_sources=("solution/oracle.patch",))
+    assert [f.check for f in report.failures] == ["answer-source-leaked"]
+    assert "instruction.md:1" in report.failures[0].detail
+
+
+def test_answer_sources_skip_patch_context_and_headers(tmp_path: Path) -> None:
+    """A context line or a header of a `.patch` source is base text, not a leak."""
+    task_dir = _coding_task_with_oracle(tmp_path, "def unchanged_context_helper():\n+++ b/src/sum_module.py")
+    report = Seal.scan_agent_visible(task_dir, tokens=[], control_token=CONTROL_TOKEN, answer_sources=("solution/oracle.patch",))
+    assert report.failures == []
+
+
+def test_answer_sources_replace_the_default_sources(tmp_path: Path) -> None:
+    """Given `answer_sources`, only those files are mined; `None` keeps the default `solution/` prefix."""
+    task_dir = _coding_task_with_oracle(tmp_path, "a_line_that_only_the_default_sources_mine")
+    sources = ("solution/oracle.patch",)
+    explicit = Seal.scan_agent_visible(task_dir, tokens=[], control_token=CONTROL_TOKEN, answer_sources=sources)
+    default = Seal.scan_agent_visible(task_dir, tokens=[], control_token=CONTROL_TOKEN)
+    assert explicit.failures == []
+    assert [f.check for f in default.failures] == ["answer-source-leaked"]
+
+
+def test_answer_sources_directory_prefix(tmp_path: Path) -> None:
+    """A source that ends with `/` is a directory: every file under it is mined."""
+    task_dir = tmp_path / "task"
+    (task_dir / "tests" / "verify" / "tests").mkdir(parents=True)
+    (task_dir / "tests" / "verify" / "tests" / "test_sum.py").write_text("assert running_total([1, 2]) == 3\n", encoding="utf-8")
+    (task_dir / "instruction.md").write_text(f"assert running_total([1, 2]) == 3\n{CONTROL_TOKEN}\n", encoding="utf-8")
+    sources = ("tests/verify/",)
+    report = Seal.scan_agent_visible(task_dir, tokens=[], control_token=CONTROL_TOKEN, answer_sources=sources)
+    assert [f.check for f in report.failures] == ["answer-source-leaked"]
+
+
+def test_instruction_scan_reports_each_name_with_its_line(tmp_path: Path) -> None:
+    """Each token found in `instruction.md` is one failing `instruction-names:<token>`, with its first line."""
+    instruction = f"Fix it.\nsrc/sum.py breaks; see sum.py\nTotaller\n{CONTROL_TOKEN}\n"
+    (tmp_path / "instruction.md").write_text(instruction, encoding="utf-8")
+    tokens = ["src/sum.py", "sum.py", "Totaller", "absent_name"]
+    report = Seal.scan_instruction(tmp_path, tokens=tokens, control_token=CONTROL_TOKEN)
+    assert [(f.check, f.detail) for f in report.failures] == [
+        ("instruction-names:src/sum.py", "'src/sum.py' at instruction.md:2"),
+        ("instruction-names:sum.py", "'sum.py' at instruction.md:2"),
+        ("instruction-names:Totaller", "'Totaller' at instruction.md:3"),
+    ]
+
+
+def test_instruction_scan_needs_a_word_boundary(tmp_path: Path) -> None:
+    """`scan` does not match `scanner` or `rescan`, and `sum.py` does not match `checksum.py`."""
+    (tmp_path / "instruction.md").write_text(f"The scanner and rescan; checksum.py.\n{CONTROL_TOKEN}\n", encoding="utf-8")
+    report = Seal.scan_instruction(tmp_path, tokens=["scan", "sum.py"], control_token=CONTROL_TOKEN)
+    assert report.failures == []
+
+
+def test_instruction_scan_without_control_token_refuses(tmp_path: Path) -> None:
+    """Without the control token in `instruction.md`, the scan refuses `scan-did-not-run`, even with a name present."""
+    (tmp_path / "instruction.md").write_text("scan is broken\n", encoding="utf-8")
+    report = Seal.scan_instruction(tmp_path, tokens=["scan"], control_token=CONTROL_TOKEN)
+    assert [f.check for f in report.failures] == ["scan-did-not-run"]
+
+
 def test_canary_absence_flagged(tmp_path: Path) -> None:
     """A canary token found anywhere under the tree is reported; absent, it passes.
 

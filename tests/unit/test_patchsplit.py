@@ -190,3 +190,27 @@ def test_is_test_path_pins_marker_list_and_substring_rule() -> None:
     )
     assert not PatchSplit.is_test_path("src/app.py")
     assert PatchSplit.is_test_path("src/latest_value.py")
+
+
+#: A diff that names one path in two sections — a rename into ``src/a.py`` and an edit of it — plus an
+#: earlier-sorting path last. Catches duplicate tokens and an order that follows the diff (NFR-1).
+_TWO_SECTIONS_ONE_PATH = (
+    _SRC_B
+    + """diff --git a/src/old.py b/src/a.py
+similarity index 100%
+rename from src/old.py
+rename to src/a.py
+"""
+    + _SRC_A
+    + _TEST_A
+)
+
+
+def test_section_paths_sorted_unique() -> None:
+    """Each ``b/`` path is listed once, sorted, whatever the section order (NFR-1)."""
+    assert PatchSplit.section_paths(_TWO_SECTIONS_ONE_PATH) == ("src/a.py", "src/b.py", "tests/test_a.py")
+
+
+def test_section_paths_empty_diff() -> None:
+    """An empty diff names no path."""
+    assert PatchSplit.section_paths("") == ()

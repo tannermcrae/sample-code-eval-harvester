@@ -4,7 +4,7 @@ title: "[Verify] Add the static coding checks to verify"
 summary: "Make verify read the datapoint type and add every coding check that reads files only."
 feature: coding-eval-harvest
 workstream: Verify
-status: in-progress
+status: done
 complexity: L
 merges: [E-1, E-2, E-3]
 implements: [FR-23, FR-24, FR-25, FR-26, FR-27, FR-28, FR-29, FR-30, NFR-8, NFR-9]
@@ -307,18 +307,18 @@ Manual checks:
 
 ## Acceptance Criteria
 
-- [ ] `verify` on a correct coding task exits 5, with only `hidden-tests-proven` and `git-channel-absence` unresolved, and no failure.
-- [ ] `verify` on a coding task never puts `hidden-tests-proven` in `passed`.
-- [ ] A planted leak of each FR-25 token type fails `answer-present`.
-- [ ] An instruction that names a changed path, basename, or symbol (4+ characters) fails `instruction-names-fix`, with the file and line in `offending`. An instruction with no names passes.
-- [ ] Without the planted instruction control token, `instruction-names-fix` refuses `scan-did-not-run`. The check does not use the base-tree suppression.
-- [ ] A one-word change in the general instructions fails `instruction-not-uniform`.
-- [ ] A copy of `oracle.patch` in `environment/` fails `answer-misplaced`.
-- [ ] Each missing spec item fails `spec-incoherent`.
-- [ ] Each coding failure has the four fields, and its `next` names a command or a file (FR-30).
-- [ ] `ORACLE_PATCH_RELPATH`, `REFERENCE_PATCH_RELPATH`, `HIDDEN_TESTS_RELDIR`, and `CODING_DATAPOINT_TYPE` are defined once, in `verify.py`.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `tests/unit/test_no_model_client.py` stays green (FR-19). `[project].dependencies` stays empty (NFR-6).
+- [x] `verify` on a correct coding task exits 5, with only `hidden-tests-proven` and `git-channel-absence` unresolved, and no failure.
+- [x] `verify` on a coding task never puts `hidden-tests-proven` in `passed`.
+- [x] A planted leak of each FR-25 token type fails `answer-present`.
+- [x] An instruction that names a changed path, basename, or symbol (4+ characters) fails `instruction-names-fix`, with the file and line in `offending`. An instruction with no names passes.
+- [x] Without the planted instruction control token, `instruction-names-fix` refuses `scan-did-not-run`. The check does not use the base-tree suppression.
+- [x] A one-word change in the general instructions fails `instruction-not-uniform`.
+- [x] A copy of `oracle.patch` in `environment/` fails `answer-misplaced`.
+- [x] Each missing spec item fails `spec-incoherent`.
+- [x] Each coding failure has the four fields, and its `next` names a command or a file (FR-30).
+- [x] `ORACLE_PATCH_RELPATH`, `REFERENCE_PATCH_RELPATH`, `HIDDEN_TESTS_RELDIR`, and `CODING_DATAPOINT_TYPE` are defined once, in `verify.py`.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `tests/unit/test_no_model_client.py` stays green (FR-19). `[project].dependencies` stays empty (NFR-6).
 
 ## Out Of Scope
 
@@ -354,3 +354,38 @@ Manual checks:
 
 **Blocked by:** [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md), [D-1](D-1-write-the-coding-task-templates-and-the-reward-stack.md)
 **Blocks:** [D-2](D-2-assemble-and-promote-coding-tasks-with-emit-kind-fix.md), [E-2](E-2-resolve-hidden-tests-proven-and-add-the-guard-tests.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `static-coding-checks-verify-e-1`  ·  **Commit:** the one `[E-1]` commit on `main` (squashed)
+
+**What was implemented:** `verify` now reads `[metadata.harvest].datapoint_type` and runs one of two
+check lists: the review list as before, or `CODING_CHECK_NAMES`. A type it does not know fails
+`unknown-datapoint-type` and runs nothing else. The coding list applies `solution/oracle.patch` at the
+base, scans for the FR-25 tokens with the coding answer sources (only the added lines of a patch are
+mined), and adds four checks that only read files: `instruction-names-fix` (paths, basenames, 4+
+character symbols, whole-word match, own control token, no base suppression), `instruction-uniform`
+(a full match against the D-1 template, naming the first line that drifted), `answer-placement`
+(SHA-256 copies and patch file names out of place), and `spec-coherent` (every missing item reported).
+`hidden-tests-proven` is always unresolved.
+
+**Files changed:**
+- `src/eval_harvest/verify.py` — path and type constants, `CODING_CHECK_NAMES`, the dispatch (`_review_checks` / `_coding_checks`), a patch-path parameter on base-and-patch / base-tree oracle / changed paths, and type-specific tokens and sources on the content scan, plus the four new coding checks and the unresolved `hidden-tests-proven`.
+- `src/eval_harvest/seal.py` — `answer_sources=` on `scan_agent_visible` (a value ending in `/` is a directory prefix), added-line mining for `.patch` sources, and the new `scan_instruction`.
+- `src/eval_harvest/patchsplit.py` — `PatchSplit.section_paths` (sorted, unique; reuses `section_path`).
+- `tests/fixtures/coding_task.py` — `CodingTaskBuilder` / `CodingTaskFixture`: a correct coding task from the squash-merge fixture.
+- `tests/integration/test_verify_coding.py` — the 34 tests the task lists (the token-leak test has 6 parameters) plus 6 more (template defect, text after the template, missing reference patch, unparsable spec, four fields, context lines).
+- `tests/integration/test_seal.py`, `tests/unit/test_patchsplit.py` — `answer_sources`, `scan_instruction`, and `section_paths` cases.
+
+**Acceptance criteria:** each is met by a named test in `test_verify_coding.py`: exit 5 with only the two unresolved checks (`test_coding_task_without_proof_exits_5`, also through `Cli.run`), never passed (`test_coding_hidden_tests_never_passed`), each token type (`test_each_coding_token_leak_fails_answer_present`, 6 cases), path/basename/symbol/hunk-header names with file and line (`test_instruction_with_*`), the control token and no suppression (`test_instruction_scan_without_control_token_refuses`, `test_path_present_at_base_still_fails`), one-word drift (`test_one_word_change_in_general_instructions_fails`), the oracle copy in `environment/` (`test_oracle_copy_in_environment_fails`), each spec item (`test_*_spec*`, `test_all_spec_failures_reported`), and the four fields (`test_each_coding_failure_has_four_actionable_fields`). The constants are defined only in `verify.py`. `mise run check` is green (694 passed). Every new guard was broken on purpose (29 breaks) and watched go red, then restored.
+
+**Deviations from the task:**
+- The coding answer sources list each hidden test file one by one, not the `tests/verify/` prefix (step 11). That way `tests/verify/tests.toml` is not mined, which Notes & Gotchas requires. The prefix form still works in `Seal` and has its own test.
+- The task's Notes say that `pr_url` and `issue_urls` have no writer. That is no longer true: A-2 put both in `FixTaskOrigin` and `Harbor._origin_table`. `verify` still reads them as optional keys. The fixture builds its `task.toml` with `Harbor.task_config_document`, so the coding fields are the real §8 shape, not a copy written by hand.
+- `_check_base_and_patch`, `_build_base_tree_oracle`, and `_changed_paths` now take the patch path instead of `task_dir`.
+- How To Verify's manual check `-k exit_5` matches no test: the name the task gives is `..._exits_5`. Use `-k exits_5`.
+
+**Follow-ups noticed but not done:**
+- D-2 should import `ORACLE_PATCH_RELPATH`, `REFERENCE_PATCH_RELPATH`, and `HIDDEN_TESTS_RELDIR` from `verify.py`.
+- E-2 replaces `_check_hidden_tests_unresolved` with the proof reader, and adds the `GuardSpec` entries for these checks.
+- `uv run pytest` reports Python 3.14.7 in this environment, but CLAUDE.md pins 3.12. I did not look into it.

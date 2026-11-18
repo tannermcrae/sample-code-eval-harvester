@@ -194,6 +194,11 @@ _ANSWER_SOURCE_FILES: Final = ("tests/oracle.json", "judge.toml")
 #: lone brace, so boilerplate does not manufacture spurious leaks; a real fix line clears it easily.
 _MIN_ANSWER_FRAGMENT_LEN: Final = 12
 
+#: The two halves of a whole-word match for the instruction scan: no identifier character may touch
+#: the token on either side, so the symbol ``scan`` does not match the word ``scanner``.
+_IDENTIFIER_BOUNDARY_BEFORE: Final = r"(?<![A-Za-z0-9_])"
+_IDENTIFIER_BOUNDARY_AFTER: Final = r"(?![A-Za-z0-9_])"
+
 #: Enough located hits to prove a canary leaked; stop scanning past this.
 _MAX_REPORTED_HITS: Final = 5
 
@@ -402,7 +407,9 @@ class Seal:
     # ───────────────────────────── content scanner (new) ─────────────────────────────
 
     @classmethod
-    def scan_agent_visible(cls, task_dir: Path, tokens: list[str], control_token: str) -> Report:
+    def scan_agent_visible(
+        cls, task_dir: Path, tokens: list[str], control_token: str, *, answer_sources: tuple[str, ...] | None = None
+    ) -> Report:
         """Grep agent-visible files for the PR number, review text, and any answer fragment (FR-35/40).
 
         The scanned corpus is every file under ``task_dir`` *except* the verifier-only subtrees
@@ -417,6 +424,11 @@ class Seal:
         it refuses ``scan-did-not-run`` rather than reporting clean. Kept as check-and-refuse (not
         self-planting) so the guard can be watched to fail — E-3 removes the token and confirms it
         goes red. Reads files only; issues no subprocess and no network call (NFR-2).
+
+        ``answer_sources`` replaces the default answer sources for a task of another shape (a coding
+        task, E-1). Each value is a path relative to ``task_dir``: one that ends with ``/`` is a directory
+        prefix, any other is one file. ``None`` keeps the review sources. A source that ends with
+        ``.patch`` gives only its added lines, because its context lines exist at the base.
         """
         report = Report(repo=str(task_dir))
         corpus = cls._agent_visible_files(task_dir)
@@ -425,7 +437,7 @@ class Seal:
             report.add("scan-did-not-run", passed=False, detail=detail)
             return report
         report.add("content-scan-ran", passed=True, detail=f"control token seen across {len(corpus)} agent-visible file(s)")
-        answer_tokens = cls._answer_tokens(task_dir, tokens)
+        answer_tokens = cls._answer_tokens(task_dir, tokens, answer_sources)
         for token in tokens:
             cls._report_token(report, task_dir, corpus, token)
         for fragment in answer_tokens - set(tokens):
@@ -455,26 +467,84 @@ class Seal:
             report.add("answer-source-leaked", passed=False, detail=f"verifier-only text {fragment!r} at {location}")
 
     @classmethod
-    def _answer_tokens(cls, task_dir: Path, tokens: list[str]) -> set[str]:
+    def _answer_tokens(cls, task_dir: Path, tokens: list[str], answer_sources: tuple[str, ...] | None) -> set[str]:
         """The explicit ``tokens`` plus answer fragments mined from the verifier-only sources (FR-40)."""
         mined = set(tokens)
-        for source in cls._answer_source_files(task_dir):
-            mined |= cls._long_lines(source.read_text(encoding="utf-8", errors="replace"))
+        for source in cls._answer_source_files(task_dir, answer_sources):
+            mined |= cls._answer_fragments(source)
         return mined
 
     @classmethod
-    def _answer_source_files(cls, task_dir: Path) -> list[Path]:
+    def _answer_source_files(cls, task_dir: Path, answer_sources: tuple[str, ...] | None = None) -> list[Path]:
         """The existing verifier-only files whose content is the reference answer (FR-40)."""
+        if answer_sources is None:
+            prefixes: tuple[str, ...] = _ANSWER_SOURCE_PREFIXES
+            files: tuple[str, ...] = _ANSWER_SOURCE_FILES
+        else:
+            prefixes = tuple(source for source in answer_sources if source.endswith("/"))
+            files = tuple(source for source in answer_sources if not source.endswith("/"))
         found: list[Path] = []
-        for prefix in _ANSWER_SOURCE_PREFIXES:
-            found.extend(p for p in (task_dir / prefix).rglob("*") if p.is_file())
-        found.extend(task_dir / rel for rel in _ANSWER_SOURCE_FILES if (task_dir / rel).is_file())
+        for prefix in prefixes:
+            found.extend(sorted(p for p in (task_dir / prefix).rglob("*") if p.is_file()))
+        found.extend(task_dir / rel for rel in files if (task_dir / rel).is_file())
         return found
+
+    @classmethod
+    def _answer_fragments(cls, source: Path) -> set[str]:
+        """The answer fragments of one source: every long line, or only the added lines of a patch."""
+        text = source.read_text(encoding="utf-8", errors="replace")
+        if source.name.endswith(".patch"):
+            text = cls._added_lines(text)
+        return cls._long_lines(text)
+
+    @staticmethod
+    def _added_lines(patch_text: str) -> str:
+        """The added lines of a unified diff, without their ``+``.
+
+        Context and removed lines exist at the base, and the ``diff --git`` headers are paths, so
+        mining them would flag base text that every agent can read as a leak on every task.
+        """
+        added = [line[1:] for line in patch_text.splitlines() if line.startswith("+") and not line.startswith("+++")]
+        return "\n".join(added)
 
     @staticmethod
     def _long_lines(text: str) -> set[str]:
         """The stripped lines long enough to be a real answer fragment (see ``_MIN_ANSWER_FRAGMENT_LEN``)."""
         return {stripped for line in text.splitlines() if len(stripped := line.strip()) >= _MIN_ANSWER_FRAGMENT_LEN}
+
+    # ───────────────────────────── instruction scan (coding, FR-26) ─────────────────────────────
+
+    @classmethod
+    def scan_instruction(cls, task_dir: Path, tokens: list[str], control_token: str) -> Report:
+        """Find each of ``tokens`` in ``task_dir/instruction.md`` as a whole word (FR-26).
+
+        ``tokens`` are the names of the fix: changed paths, their basenames, and changed symbols.
+        Unlike the content scan, nothing is suppressed because it exists at the base: every changed
+        path exists at the base, and naming it is the defect. A token matches only with no identifier
+        character on either side, so the symbol ``scan`` does not match ``scanner``. The
+        ``control_token`` is the honesty guard, as in :meth:`scan_agent_visible`: when the planted
+        token is not in the file, the scan refuses ``scan-did-not-run``. Reads one file only (NFR-2).
+        """
+        report = Report(repo=str(task_dir))
+        instruction = task_dir / "instruction.md"
+        lines = instruction.read_bytes().decode("utf-8", errors="replace").splitlines() if instruction.is_file() else []
+        if not control_token or not any(control_token in line for line in lines):
+            detail = f"control token {control_token!r} absent from instruction.md; an empty result is not trusted clean (NFR-6)"
+            report.add("scan-did-not-run", passed=False, detail=detail)
+            return report
+        report.add("instruction-scan-ran", passed=True, detail=f"control token seen in instruction.md ({len(lines)} lines)")
+        for token in tokens:
+            cls._report_instruction_name(report, lines, token)
+        return report
+
+    @staticmethod
+    def _report_instruction_name(report: Report, lines: list[str], token: str) -> None:
+        """Add a failing finding when ``token`` occurs as a whole word on some line of the instruction."""
+        pattern = re.compile(_IDENTIFIER_BOUNDARY_BEFORE + re.escape(token) + _IDENTIFIER_BOUNDARY_AFTER)
+        for line_number, line in enumerate(lines, start=1):
+            if pattern.search(line):
+                report.add(f"instruction-names:{token}", passed=False, detail=f"{token!r} at instruction.md:{line_number}")
+                return
 
     @classmethod
     def _agent_visible_files(cls, task_dir: Path) -> list[Path]:
