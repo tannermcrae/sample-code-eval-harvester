@@ -87,10 +87,12 @@ the coding help is sufficient.
 ```python
 DatapointKind = Literal["reject", "approve"]
 
+
 class ExpectedProperties(BaseModel):
     expected_verdict: Literal["block", "approve"]
     minimum_findings: int = Field(ge=0)
     must_mention: tuple[str, ...] = ()
+
 
 class Objective(BaseModel):
     ...
@@ -102,10 +104,12 @@ class Objective(BaseModel):
 ```python
 DatapointKind = Literal["reject", "approve", "fix"]
 
+
 class FixExpectedProperties(BaseModel):
     model_config = ConfigDict(frozen=True)
     minimum_fail_to_pass: int = Field(ge=1)
     must_touch_paths: tuple[str, ...] = ()
+
 
 class Objective(BaseModel):
     ...

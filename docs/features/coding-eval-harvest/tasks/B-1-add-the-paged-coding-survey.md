@@ -142,22 +142,23 @@ CLI. Every function in Parts 1 and 2 lives in `src/eval_harvest/fix_survey.py`.
 ```python
 class FixFactsDict(TypedDict):
     number: int
-    title: str                 # verbatim from the forge row; Part 2 cuts it for pages
+    title: str  # verbatim from the forge row; Part 2 cuts it for pages
     url: str
-    merged_at: str             # "" when not merged
-    author: str                # login, "" when absent
+    merged_at: str  # "" when not merged
+    author: str  # login, "" when absent
     integration_revision: str  # "" when unknown
     integration_parents: int
-    linked_issues: list[int]   # sorted ascending
+    linked_issues: list[int]  # sorted ascending
     fix_signal: bool
-    source_paths: list[str]    # sorted
-    test_paths: list[str]      # sorted
+    source_paths: list[str]  # sorted
+    test_paths: list[str]  # sorted
     source_lines_added: int
     source_lines_deleted: int
     test_lines_added: int
-    files_touched: int         # len(source_paths) + len(test_paths)
+    files_touched: int  # len(source_paths) + len(test_paths)
     author_commits: int
-    excluded_by: list[str]     # [] means "rankable"; order = the reason tuple
+    excluded_by: list[str]  # [] means "rankable"; order = the reason tuple
+
 
 @dataclass(frozen=True, slots=True)
 class FixSurveyThresholds:

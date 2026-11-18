@@ -197,6 +197,7 @@ class Commit:
     body: str
     paths: frozenset[str]
 
+
 # git log --first-parent --format=<RS>%H<FS>%at<FS>%s<FS>%b<FS> --name-only <branch>
 _LOG_RECORD_FIELDS = 5
 ```
@@ -207,10 +208,11 @@ _LOG_RECORD_FIELDS = 5
 class Commit:
     sha: str
     at: int
-    author_email: str      # lowercased, "" when git gives none
+    author_email: str  # lowercased, "" when git gives none
     subject: str
     body: str
     paths: frozenset[str]
+
 
 # git log --first-parent --format=<RS>%H<FS>%at<FS>%ae<FS>%s<FS>%b<FS> --name-only <branch>
 _LOG_RECORD_FIELDS = 6
@@ -308,7 +310,8 @@ class RefusalRecordDict(TypedDict):
     datapoint: str
     offending: str
     next: str
-    verb: str          # "survey" | "capture" | "emit"
+    verb: str  # "survey" | "capture" | "emit"
+
 
 class RefusalLog:
     @staticmethod
@@ -331,17 +334,19 @@ class IssueFacts:
     number: int
     url: str
     title: str
-    body: str               # "" when the forge gives null
-    is_pull_request: bool   # True when a GitHub "issue" number is a PR
+    body: str  # "" when the forge gives null
+    is_pull_request: bool  # True when a GitHub "issue" number is a PR
+
 
 class Forge:
     @classmethod
-    def fetch_issue(cls, repo: str, issue_number: int) -> IssueFacts: ...   # raises ForgeError
+    def fetch_issue(cls, repo: str, issue_number: int) -> IssueFacts: ...  # raises ForgeError
+
 
 # gitlab.py
 class GitLab:
     @classmethod
-    def fetch_issue(cls, remote: ForgeRemote, issue_iid: int) -> IssueFacts: ...   # raises ForgeError
+    def fetch_issue(cls, remote: ForgeRemote, issue_iid: int) -> IssueFacts: ...  # raises ForgeError
 ```
 
 The candidate stores `{number, url, title, body, body_truncated}` (tech plan §8). `is_pull_request` is not stored. C-1 uses it to drop a link that is a PR.

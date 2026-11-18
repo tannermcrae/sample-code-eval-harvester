@@ -223,8 +223,16 @@ A filled `hidden_tests` entry: `{"repo_path": "tests/test_x.py", "name": "test_f
 
 The forge dict that `fetch_fix_pull_request` and `fetch_fix_merge_request` both return:
 ```python
-{"number": int, "title": str, "body": str, "url": str, "merge_commit": str, "merged_at": str,
- "head_ref_name": str, "closing_issue_numbers": list[int]}
+{
+    "number": int,
+    "title": str,
+    "body": str,
+    "url": str,
+    "merge_commit": str,
+    "merged_at": str,
+    "head_ref_name": str,
+    "closing_issue_numbers": list[int],
+}
 ```
 
 New `capture` usage:
