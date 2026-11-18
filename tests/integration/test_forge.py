@@ -15,9 +15,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fixtures.repo_builder import RepoBuilder
 
-from eval_harvest.forge import Forge, PullRequestFacts, ReviewIteration
+from eval_harvest.forge import Forge, ForgeError, IssueFacts, PullRequestFacts, ReviewIteration
 from eval_harvest.gitcmd import GitCommandRunner
 
 
@@ -172,3 +173,89 @@ def test_capture_makes_a_bounded_number_of_forge_round_trips(tmp_path: Path, mon
     assert counts["gh"] == 3, "reviews + comments + timeline — the fetch cost driver (TP-3, NFR-7)"
     assert counts["git_fetch"] == 1, "one pull-head fetch recovers the branch-deleted PR (FR-8)"
     assert len(facts.iterations) == 2 and all(iteration.recoverable for iteration in facts.iterations)
+
+
+# ───────────────────────────── issue fetch (coding-eval-harvest A-2, Part 5) ─────────────────────────────
+
+#: Recorded `gh api repos/strands-agents/evals/issues/<n>` responses, cut to the fields the code reads
+#: plus the API `url`, kept because it is the field `IssueFacts.url` must *not* come from.
+_GH_ISSUE_DIR = Path(__file__).parents[1] / "fixtures" / "gh" / "issue"
+
+
+def _stub_gh(monkeypatch: Any, response: tuple[int, str, str]) -> list[list[str]]:
+    """Replace `GitCommandRunner.gh` with a stub that returns ``response`` and records each argv."""
+    calls: list[list[str]] = []
+
+    def fake_gh(argv_tail: list[str], *, repo: str | None = None) -> tuple[int, str, str]:
+        calls.append(argv_tail)
+        return response
+
+    monkeypatch.setattr(GitCommandRunner, "gh", staticmethod(fake_gh))
+    return calls
+
+
+def _recorded_issue(name: str) -> str:
+    return (_GH_ISSUE_DIR / name).read_text(encoding="utf-8")
+
+
+def test_fetch_issue_reads_recorded_github_issue(monkeypatch: Any) -> None:
+    """The recorded issue maps onto `IssueFacts`, with the page URL a person opens, not the API URL."""
+    _stub_gh(monkeypatch, (0, _recorded_issue("issue.json"), ""))
+    recorded = json.loads(_recorded_issue("issue.json"))
+
+    issue = Forge.fetch_issue("strands-agents/evals", 337)
+
+    assert issue == IssueFacts(
+        number=337,
+        url="https://github.com/strands-agents/evals/issues/337",
+        title=recorded["title"],
+        body=recorded["body"],
+        is_pull_request=False,
+    )
+    assert issue.url != recorded["url"]
+
+
+def test_fetch_issue_makes_one_gh_call(monkeypatch: Any) -> None:
+    """One issue costs exactly one `gh api` call, with the repo in the path (NFR-4)."""
+    calls = _stub_gh(monkeypatch, (0, _recorded_issue("issue.json"), ""))
+
+    Forge.fetch_issue("strands-agents/evals", 337)
+
+    assert calls == [["api", "repos/strands-agents/evals/issues/337"]]
+
+
+def test_fetch_issue_null_body_is_empty_string(monkeypatch: Any) -> None:
+    """A `null` body becomes `""`, so `None` never reaches the candidate's string field."""
+    payload = {**json.loads(_recorded_issue("issue.json")), "body": None}
+    _stub_gh(monkeypatch, (0, json.dumps(payload), ""))
+
+    assert Forge.fetch_issue("strands-agents/evals", 337).body == ""
+
+
+def test_fetch_issue_flags_a_pull_request(monkeypatch: Any) -> None:
+    """A PR number read through the issues endpoint is flagged, so C-1 can drop the link."""
+    _stub_gh(monkeypatch, (0, _recorded_issue("pull_request_as_issue.json"), ""))
+
+    issue = Forge.fetch_issue("strands-agents/evals", 338)
+
+    assert issue.is_pull_request
+    assert issue.url == "https://github.com/strands-agents/evals/pull/338"
+
+
+def test_fetch_issue_gh_failure_raises_forge_error(monkeypatch: Any) -> None:
+    """A failed `gh` call is a `ForgeError` naming the endpoint and carrying gh's stderr."""
+    _stub_gh(monkeypatch, (1, "", "HTTP 404: Not Found"))
+
+    with pytest.raises(ForgeError, match=r"repos/strands-agents/evals/issues/9 failed \(1\): HTTP 404: Not Found"):
+        Forge.fetch_issue("strands-agents/evals", 9)
+
+
+def test_fetch_issue_non_object_raises_forge_error(monkeypatch: Any) -> None:
+    """A JSON array (or a body that is not JSON) is refused as a `ForgeError`, never read as an issue."""
+    _stub_gh(monkeypatch, (0, "[]", ""))
+    with pytest.raises(ForgeError, match="list"):
+        Forge.fetch_issue("strands-agents/evals", 9)
+
+    _stub_gh(monkeypatch, (0, "<html>sign in</html>", ""))
+    with pytest.raises(ForgeError, match="issues/9"):
+        Forge.fetch_issue("strands-agents/evals", 9)

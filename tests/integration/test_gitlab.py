@@ -27,7 +27,7 @@ from fixtures.repo_builder import GLAB_PAYLOAD_DIR, MergeRequestFixture, RepoBui
 
 from eval_harvest.candidate import Candidate
 from eval_harvest.cli import Cli, ExitCode
-from eval_harvest.forge import Forge, ForgeError
+from eval_harvest.forge import Forge, ForgeError, IssueFacts
 from eval_harvest.forge_host import ForgeKind, ForgeRemote
 from eval_harvest.gitcmd import GitCommandRunner
 from eval_harvest.gitlab import GitLab
@@ -382,3 +382,57 @@ def test_survey_verb_fetches_merge_request_heads_with_the_gitlab_refspec(tmp_pat
     assert payload["blockers"] == {}, payload["blockers"]
     _, head = GitCommandRunner.git(fixture.clone, "rev-parse", f"refs/remotes/pr/{fixture.iid}")
     assert head == fixture.round3_tip
+
+
+# ───────────────────────────── issue fetch (coding-eval-harvest A-2, Part 5) ─────────────────────────────
+
+#: Where the recorded gitlab-org/cli issue lives (`ISSUE_QUERY` against iid 8000, verbatim).
+_ISSUE_REMOTE = ForgeRemote(ForgeKind.GITLAB, "gitlab.com", "gitlab-org/cli")
+
+
+def _stub_glab(monkeypatch: pytest.MonkeyPatch, body: str) -> list[list[str]]:
+    """Replace `glab` with a stub returning ``body`` (and `gh` with a failure), recording each argv."""
+    calls: list[list[str]] = []
+
+    def fake_glab(argv_tail: list[str]) -> tuple[int, str, str]:
+        calls.append(argv_tail)
+        return 0, body, ""
+
+    monkeypatch.setattr(GitCommandRunner, "gh", staticmethod(lambda *_, **__: pytest.fail("a GitLab issue fetch called gh")))
+    monkeypatch.setattr(GitCommandRunner, "glab", staticmethod(fake_glab))
+    return calls
+
+
+def test_gitlab_fetch_issue_reads_recorded_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recorded GraphQL issue maps onto `IssueFacts` through `title`, `description`, and `webUrl`."""
+    body = (_RECORDED / "issue.json").read_text(encoding="utf-8")
+    recorded = json.loads(body)["data"]["project"]["issue"]
+    calls = _stub_glab(monkeypatch, body)
+
+    issue = GitLab.fetch_issue(_ISSUE_REMOTE, 8000)
+
+    assert issue == IssueFacts(
+        number=8000,
+        url=recorded["webUrl"],
+        title="glab ci status - exit broken",
+        body=recorded["description"],
+        is_pull_request=False,
+    )
+    assert len(calls) == 1
+    assert calls[0][-4:] == ["-f", "fullPath=gitlab-org/cli", "-f", "iid=8000"]
+
+
+def test_gitlab_fetch_issue_missing_issue_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`issue: null` is a `ForgeError` naming the iid and the project, never an empty issue."""
+    _stub_glab(monkeypatch, json.dumps({"data": {"project": {"issue": None}}}))
+
+    with pytest.raises(ForgeError, match=r"gitlab.com has no issue #99 in gitlab-org/cli"):
+        GitLab.fetch_issue(_ISSUE_REMOTE, 99)
+
+
+def test_gitlab_fetch_issue_never_calls_gh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The GitLab path reads the issue through `glab` only; a `gh` call fails the test."""
+    body = json.dumps({"data": {"project": {"issue": {"iid": "5", "title": "t", "description": None, "webUrl": "u"}}}})
+    _stub_glab(monkeypatch, body)
+
+    assert GitLab.fetch_issue(_ISSUE_REMOTE, 5).body == ""

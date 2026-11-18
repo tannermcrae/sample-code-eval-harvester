@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any  # GraphQL returns arbitrary JSON objects; dict[str, Any] is the honest shape.
 
-from eval_harvest.forge import Forge, ForgeError, PullRequestFacts
+from eval_harvest.forge import Forge, ForgeError, IssueFacts, PullRequestFacts
 from eval_harvest.forge_host import ForgeRemote
 from eval_harvest.gitcmd import GitCommandRunner
 
@@ -83,6 +83,17 @@ query($fullPath: ID!, $iid: String!, $first: Int!, $after: String) {
         }
       }
     }
+  }
+}
+"""
+
+#: One issue's text, for the coding capture (FR-13). ``iid`` is a ``String`` in GitLab's GraphQL, so it
+#: is passed with ``-f``, like ``CAPTURE_QUERY``'s. The field names were checked against a live
+#: gitlab.com response (``tests/fixtures/glab/recorded/issue.json``).
+ISSUE_QUERY = """
+query($fullPath: ID!, $iid: String!) {
+  project(fullPath: $fullPath) {
+    issue(iid: $iid) { iid title description webUrl }
   }
 }
 """
@@ -263,6 +274,26 @@ class GitLab:
                 break
             cursor = merge_request["notes"]["pageInfo"]["endCursor"]
         return {**merge_request, "notes": {"nodes": notes}}
+
+    @classmethod
+    def fetch_issue(cls, remote: ForgeRemote, issue_iid: int) -> IssueFacts:
+        """Read one issue with a single ``glab api graphql`` call (NFR-4), or raise ``ForgeError``.
+
+        :meth:`_run_graphql` already refuses a failed call, a non-JSON body, GraphQL errors, and a
+        missing project; a missing issue is refused here by iid and project. GitLab has no "issue
+        that is really an MR", so ``is_pull_request`` is always ``False``.
+        """
+        variables = ["-f", f"fullPath={remote.project_path}", "-f", f"iid={issue_iid}"]
+        issue: dict[str, Any] | None = cls._run_graphql(remote, ISSUE_QUERY, variables).get("issue")
+        if issue is None:
+            raise ForgeError(f"{remote.host} has no issue #{issue_iid} in {remote.project_path}")
+        return IssueFacts(
+            number=int(issue["iid"]),
+            url=str(issue["webUrl"]),
+            title=str(issue["title"]),
+            body=str(issue.get("description") or ""),
+            is_pull_request=False,
+        )
 
     @classmethod
     def _fetch_notes_page(cls, remote: ForgeRemote, iid: int, cursor: str | None) -> dict[str, Any]:

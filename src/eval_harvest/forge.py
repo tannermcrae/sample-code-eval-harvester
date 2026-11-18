@@ -108,6 +108,21 @@ class PullRequestFacts:
     comments: tuple[ReviewComment, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class IssueFacts:
+    """One issue as the forge returned it — the symptom a coding task's instruction is written from (FR-13).
+
+    The body is not truncated here; the forge layer returns facts as they are, and the candidate
+    (C-1) applies its own limit.
+    """
+
+    number: int
+    url: str  # the page a person opens, never the API URL
+    title: str
+    body: str  # "" when the forge gives null
+    is_pull_request: bool  # True when a GitHub "issue" number is a PR
+
+
 class Forge:
     """Fetch and reconstruct one PR's review iterations, comments, and verdicts. Holds no state."""
 
@@ -154,6 +169,38 @@ class Forge:
         code, out, err = GitCommandRunner.git_with_stderr(clone, "fetch", remote, refspec)
         if code != 0:
             raise ForgeError(f"git fetch {refspec!r} from {remote} failed ({code}): {err or out}")
+
+    @classmethod
+    def fetch_issue(cls, repo: str, issue_number: int) -> IssueFacts:
+        """Read one issue with a single ``gh api repos/<repo>/issues/<n>`` call (NFR-4), or raise ``ForgeError``.
+
+        GitHub answers this endpoint for a PR number too, with a ``pull_request`` key — "Fixes #12"
+        can name a PR — so that is reported as ``is_pull_request`` for the caller to drop. ``url`` is
+        the ``html_url``: the API ``url`` is not a page a person (or the leakage scan) would write.
+        The repo goes in the path because ``gh api`` takes no ``--repo``.
+        """
+        payload = cls._fetch_api_object(f"repos/{repo}/issues/{issue_number}")
+        return IssueFacts(
+            number=int(payload["number"]),
+            url=str(payload["html_url"]),
+            title=str(payload["title"]),
+            body=str(payload.get("body") or ""),
+            is_pull_request="pull_request" in payload,
+        )
+
+    @classmethod
+    def _fetch_api_object(cls, api_path: str) -> dict[str, Any]:
+        """Read a ``gh api`` endpoint that returns a JSON object — the object twin of :meth:`_fetch_api_list`."""
+        code, out, err = GitCommandRunner.gh(["api", api_path])
+        if code != 0:
+            raise ForgeError(f"gh api {api_path} failed ({code}): {err}")
+        try:
+            loaded = json.loads(out)
+        except json.JSONDecodeError as error:
+            raise ForgeError(f"gh api {api_path} returned a body that is not JSON: {error}") from error
+        if not isinstance(loaded, dict):
+            raise ForgeError(f"gh api {api_path} returned {type(loaded).__name__}, expected a JSON object")
+        return loaded
 
     @classmethod
     def _fetch_api_list(cls, api_path: str) -> list[dict[str, Any]]:
