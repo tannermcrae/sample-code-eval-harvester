@@ -4,7 +4,7 @@ title: "[Prerequisites] Add the shared prerequisites for coding datapoints"
 summary: "Add the small shared parts that the coding verbs need: author email, test-file rule, Harbor fields, refusal log, issue fetch."
 feature: coding-eval-harvest
 workstream: Prerequisites
-status: in-progress
+status: done
 complexity: L
 merges: [A-1, A-2, A-3, A-4, A-5]
 implements: [TP-1, TP-2, TP-3, TP-5, TP-6, FR-5, FR-6, FR-12, FR-13, FR-33, FR-34, NFR-4, NFR-5]
@@ -424,25 +424,25 @@ Manual checks:
 
 ## Acceptance Criteria
 
-- [ ] Each `Commit` has `author_email`, lowercased. `Survey.mainline` still makes exactly one git call.
-- [ ] `TEST_MARKERS` is defined in `patchsplit.py` only, and `survey.py` imports it.
-- [ ] `PatchSplit.split` puts each `diff --git` section in exactly one part, byte-exact, in the original order.
-- [ ] `tests/fixtures/gh/survey/expected.json` does not change.
-- [ ] A coding `task.toml` from `task_config_document` matches tech plan §8, has `pr_url` and `issue_urls` in `[metadata.origin]`, and passes `validate_task_config`.
-- [ ] A bad `exclude` value gives a `compile.schema-invalid` violation.
-- [ ] The review `task.toml` bytes and the `metric_script` bytes do not change.
-- [ ] `metric_script_by_type` gives a mean for each key over the rows of its own type only.
-- [ ] `FIX_REWARD_KEYS` exists in `emit.py` with the ten ADR-5 keys.
-- [ ] Each per-datapoint refusal of review `capture` and `emit` writes one file under `refusals/review/`. A later success for the same datapoint removes the file.
-- [ ] `read_all` returns the records by type, sorted, and refuses a malformed file.
-- [ ] stdout, stderr, and exit codes of `capture` and `emit` do not change.
-- [ ] `Forge.fetch_issue` and `GitLab.fetch_issue` each make exactly one forge call. Each failure is a `ForgeError` with a message that names the issue and the cause.
-- [ ] A GitHub PR number read as an issue is flagged with `is_pull_request`.
-- [ ] The recorded payloads are real forge responses with unused fields removed.
-- [ ] `patchsplit.py` and `refusal_log.py` import no `eval_harvest` module.
-- [ ] Each part is its own commit.
-- [ ] All commands in "How To Verify" pass, including `mise run test-harbor`.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
+- [x] Each `Commit` has `author_email`, lowercased. `Survey.mainline` still makes exactly one git call.
+- [x] `TEST_MARKERS` is defined in `patchsplit.py` only, and `survey.py` imports it.
+- [x] `PatchSplit.split` puts each `diff --git` section in exactly one part, byte-exact, in the original order.
+- [x] `tests/fixtures/gh/survey/expected.json` does not change.
+- [x] A coding `task.toml` from `task_config_document` matches tech plan §8, has `pr_url` and `issue_urls` in `[metadata.origin]`, and passes `validate_task_config`.
+- [x] A bad `exclude` value gives a `compile.schema-invalid` violation.
+- [x] The review `task.toml` bytes and the `metric_script` bytes do not change.
+- [x] `metric_script_by_type` gives a mean for each key over the rows of its own type only.
+- [x] `FIX_REWARD_KEYS` exists in `emit.py` with the ten ADR-5 keys.
+- [x] Each per-datapoint refusal of review `capture` and `emit` writes one file under `refusals/review/`. A later success for the same datapoint removes the file.
+- [x] `read_all` returns the records by type, sorted, and refuses a malformed file.
+- [x] stdout, stderr, and exit codes of `capture` and `emit` do not change.
+- [x] `Forge.fetch_issue` and `GitLab.fetch_issue` each make exactly one forge call. Each failure is a `ForgeError` with a message that names the issue and the cause.
+- [x] A GitHub PR number read as an issue is flagged with `is_pull_request`.
+- [x] The recorded payloads are real forge responses with unused fields removed.
+- [x] `patchsplit.py` and `refusal_log.py` import no `eval_harvest` module.
+- [x] Each part is its own commit.
+- [x] All commands in "How To Verify" pass, including `mise run test-harbor`.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
 
 ## Out Of Scope
 
@@ -502,3 +502,59 @@ Manual checks:
 
 **Blocked by:** [A-1](A-1-fix-the-two-existing-survey-and-registry-defects.md) (Parts 1 and 2 change `survey.py` after A-1's survey fix). Parts 3, 4, and 5 do not need A-1, and you can start them now.
 **Blocks:** [B-1](B-1-add-the-paged-coding-survey.md), [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md), [D-2](D-2-assemble-and-promote-coding-tasks-with-emit-kind-fix.md), [E-1](E-1-add-the-static-coding-checks-to-verify.md), [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md)
+
+## Completion Log
+
+**Completed:** 2026-11-18  ·  **Branch:** `shared-prereqs-coding-a-2`  ·  **Commits:** `4e55814` (Part 1), `3fb765f` (Part 2), `16d87c1` (Part 3), `a954703` (Part 4), `bd0d563` (Part 5), plus this completion commit
+
+**What was implemented:** The five shared prerequisites, one commit each: the author email in the one
+mainline `git log` pass; `patchsplit.py` with the single test-path rule and a byte-exact source/test
+splitter; coding `task.toml` fields, the artifact `exclude` check, `metric_script_by_type`, and
+`FIX_REWARD_KEYS`; the persistent `refusals/<type>/` log, wired into review `capture` and `emit`;
+and `fetch_issue` for GitHub and GitLab, with three recorded payloads.
+
+**Files changed:**
+- `src/eval_harvest/survey.py`: `Commit.author_email`, `%ae` in the log format, six-field parse, `PatchSplit.is_test_path`.
+- `src/eval_harvest/patchsplit.py` (new): `TEST_MARKERS`, `SplitPatch`, `PatchSplit.is_test_path/file_sections/section_path/split`.
+- `src/eval_harvest/harbor.py`: `FixTaskOrigin`, `FixHarvestFields`, `artifacts` parameter, union origin/harvest tables, `_check_artifact_exclude`, `metric_script_by_type`.
+- `src/eval_harvest/emit.py`: `FIX_REWARD_KEYS`.
+- `src/eval_harvest/refusal_log.py` (new): `RefusalLog`, `RefusalRecordDict`, `REFUSALS_DIRNAME`, `DATAPOINT_TYPES`.
+- `src/eval_harvest/cli.py`: refusal write/clear in `_capture_single`, `_capture_item`, `handle_emit`, `_emit_item`, and the helpers `_log_refusal`, `_clear_refusal`, `_log_emit_refusal`.
+- `src/eval_harvest/forge.py`: `IssueFacts`, `Forge.fetch_issue`, `Forge._fetch_api_object`.
+- `src/eval_harvest/gitlab.py`: `ISSUE_QUERY`, `GitLab.fetch_issue`.
+- Tests: `tests/integration/test_survey.py`, `tests/unit/test_patchsplit.py` (new), `tests/unit/test_harbor.py`, `tests/unit/test_refusal_log.py` (new), `tests/integration/test_cli.py`, `tests/integration/test_batch.py`, `tests/integration/test_forge.py`, `tests/integration/test_gitlab.py`, `tests/e2e/test_refusals.py`, and the export `FIXTURE_AUTHOR_EMAIL` in `tests/fixtures/repo_builder.py`.
+- Fixtures: `tests/fixtures/gh/issue/issue.json`, `tests/fixtures/gh/issue/pull_request_as_issue.json`, `tests/fixtures/glab/recorded/issue.json`.
+- `docs/features/coding-eval-harvest/decisions-tech-plan.md`: the 2026-11-18 entry for the refusal-log contract change.
+
+**Acceptance criteria:**
+- Author email and one git call: `test_mainline_records_author_email`, `test_mainline_is_one_git_call`.
+- `TEST_MARKERS` only in `patchsplit.py`: `grep -rn TEST_MARKERS src/` shows the definition there and its one use in `is_test_path`. See the deviations about the import.
+- Split byte-exact and ordered: the `test_split_*` cases. Watched four fail with the conftest marker removed and the quoted-path parse broken.
+- `expected.json` unchanged: `git diff main -- tests/fixtures/gh/survey/expected.json` is empty, and `test_survey_matches_golden` passes.
+- Coding `task.toml`: `test_coding_config_matches_section_8`, `test_coding_origin_carries_urls`.
+- Bad `exclude`: `test_artifact_exclude_must_be_list_of_strings`, `test_artifact_exclude_rejects_dotdot`. Both were red before the check existed.
+- Review bytes unchanged: `test_review_config_bytes_unchanged` and `test_review_metric_script_bytes_unchanged` (sha256 values pinned before the change).
+- Per-type means: `test_metric_by_type_*`, and the manual five-row run gave `mean_coverage_all 1.0, mean_fix_reward 1.0, trials 5/3/2`. Red with the per-type selection removed.
+- `FIX_REWARD_KEYS`: `test_fix_reward_keys_are_the_adr5_list`.
+- Refusal files written and cleared: `TestRefusalLogWiring` (test_cli), `TestBatchRefusalLog` (test_batch), and the E2E assertion in `test_emit_approve_with_high_finding_is_refused` through the real console script.
+- `read_all`: `test_read_all_is_sorted`, `test_read_all_rejects_malformed_file`. Red with the sort removed.
+- stdout, stderr, and exit codes unchanged: every existing capture, emit, and batch test passes unchanged, and the new tests assert the same exit codes and `refused:` lines.
+- One forge call and `ForgeError` messages: `test_fetch_issue_makes_one_gh_call`, `test_fetch_issue_gh_failure_raises_forge_error`, `test_gitlab_fetch_issue_reads_recorded_issue` (one glab call), `test_gitlab_fetch_issue_missing_issue_raises`.
+- `is_pull_request`: `test_fetch_issue_flags_a_pull_request`.
+- Recorded payloads: recorded live on 2026-11-18 from strands-agents/evals #337 and #338 and gitlab-org/cli iid 8000. See the deviations about `url`.
+- No project imports in `patchsplit.py` or `refusal_log.py`: grep shows no `eval_harvest` import in either.
+- One commit for each part: five part commits plus this completion commit.
+- How To Verify: all four pytest groups pass, `mise run test-harbor` passes (93), `mise run lint` and `mise run typecheck` pass, and `mise run check` passes (599 passed, 1 skipped: a GitHub HTTP 502 in an E2E fixture). `mise run test-e2e` passes (14).
+- No regressions: the full suite is green, and `[project].dependencies = []` is unchanged.
+
+**Deviations from the task:**
+- `survey.py` imports only `PatchSplit`, not `TEST_MARKERS` too. The survey no longer reads the tuple, so the extra import would be unused and ruff (F401) would fail. The intent of the criterion (one definition) holds.
+- The capture-refusal tests stub `Forge.capture` with an all-unrecoverable bundle (the `test_candidate.py` pattern) and do not use `build_pull_request_with_unrecoverable_iteration`. That fixture keeps its approved round recoverable, so `capture` succeeds on it and never refuses.
+- The GitHub issue payloads keep the API `url` field next to the fields the code reads. It is the field `IssueFacts.url` must not come from, and the mapping test needs it to tell the two URLs apart.
+- `Forge._fetch_api_object` also maps a non-JSON body to `ForgeError` (`_fetch_api_list` would raise `JSONDecodeError`), so that each failure is a `ForgeError`, as the acceptance criterion asks.
+- The task lists no E2E case. One assertion for the new refusal file was added to the existing E2E emit-refusal test, because the change alters the files a verb writes (see the `test-e2e` note in `mise.toml`).
+- `Commit` is declared as `@dataclass(frozen=True, slots=True)` like its neighbors. The schema shows `frozen=True` only.
+
+**Follow-ups noticed but not done:**
+- gitlab.com now returns `webUrl` for an issue as `/-/work_items/<iid>`, not `/-/issues/<iid>`. E-1's leak-token scan must use the URL the forge gives, not build one.
+- `Forge._fetch_api_list` still raises a raw `JSONDecodeError` on a body that is not JSON. This is out of scope.

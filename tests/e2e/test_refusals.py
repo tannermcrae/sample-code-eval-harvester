@@ -75,6 +75,12 @@ def test_emit_approve_with_high_finding_is_refused(pipeline: Pipeline, tmp_path:
     combined = result.stdout + result.stderr
     assert combined.strip(), "refusal produced no message"
     assert "missing-patch" not in combined, f"refused for the wrong reason (patches missing, not the high finding): {combined}"
+    # The refusal is also kept for the `dataset` report, under the emit datapoint `pr-<n>/approve` (FR-33).
+    record_path = dataset / "refusals" / "review" / f"pr-{pipeline.pr}__approve.json"
+    assert record_path.is_file(), f"no refusal record at {record_path}"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert (record["datapoint"], record["verb"]) == (f"pr-{pipeline.pr}/approve", "emit")
+    assert record["check"] in combined
 
 
 @requires_network
