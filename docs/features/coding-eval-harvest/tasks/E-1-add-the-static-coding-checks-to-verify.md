@@ -4,7 +4,7 @@ title: "[Verify] Add the static coding checks to verify"
 summary: "Make verify read the datapoint type and add every coding check that reads files only."
 feature: coding-eval-harvest
 workstream: Verify
-status: todo
+status: in-progress
 complexity: L
 merges: [E-1, E-2, E-3]
 implements: [FR-23, FR-24, FR-25, FR-26, FR-27, FR-28, FR-29, FR-30, NFR-8, NFR-9]
