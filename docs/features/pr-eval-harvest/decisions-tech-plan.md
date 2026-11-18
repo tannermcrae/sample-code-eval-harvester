@@ -317,6 +317,15 @@ of `emit`'s `finding-iteration-mismatch`: the tech-plan gave `survey` only `no-r
 an implementer working from the plan alone would build the coarser version. Naming the blockers is
 what lets the driving agent act on a refusal instead of guessing why a repository yielded nothing.
 
+**2026-11-18 — `no-test-change` is no longer a review-survey blocker.** The entry above lists
+`no-test-change` in the blocker taxonomy, but a review datapoint needs no test change: the blocker's
+own remedy said such a PR was "harvestable for review", while the code dropped it from the harvestable
+set. The review survey's blockers are now `no-integration-commit`, `no-pull-head-ref`,
+`no-changed-paths`, and `squash-without-change-tip`. `has_test_change` and `test_paths` stay in each
+row as facts. The test-change exclusion belongs to the coding survey alone (coding-eval-harvest TP-7),
+so the two survey types cannot disagree about what the rule means. The entry above is left as written;
+this log is a history.
+
 **Tests are organized by kind into `tests/unit/` and `tests/integration/`, with gating left
 orthogonal to the split.** `tests/unit/` is the pure, deterministic, single-module tier (the
 `tomlw`/`diffspan`/`harbor`/`riskmap` module tests, the no-model-client and static-analysis-exclude

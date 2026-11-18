@@ -361,7 +361,8 @@ def test_survey_verb_fetches_merge_request_heads_with_the_gitlab_refspec(tmp_pat
 
     Catches the GitHub refspec surviving anywhere on the path: GitLab serves no ``refs/pull/*``, so
     the fetch would fail (or, with ``--no-fetch``, every MR would be blocked ``no-pull-head-ref``).
-    The fixture changes no test file, so the one MR is blocked ``no-test-change`` — and only that.
+    With the GitLab refspec fetched, the one MR has no blocker, so the survey exits 0 with it
+    harvestable — a missing test change does not block a review datapoint.
     """
     fixture = RepoBuilder.build_gitlab_merge_request_with_force_push(tmp_path)
     _point_clone_at_gitlab(fixture)
@@ -376,9 +377,8 @@ def test_survey_verb_fetches_merge_request_heads_with_the_gitlab_refspec(tmp_pat
 
     code = Cli.run(["--json", "survey", "--clone", str(fixture.clone), "--repo", "group/sub/project"])
 
-    (refusal,) = json.loads(capsys.readouterr().out)["failures"]
-    assert code == ExitCode.REFUSAL
-    assert refusal["check"] == "no-harvestable-pr"
-    assert refusal["offending"].endswith("the most common blocker is no-test-change (1 of 1)"), refusal
+    payload = json.loads(capsys.readouterr().out)
+    assert code == ExitCode.SUCCESS
+    assert payload["blockers"] == {}, payload["blockers"]
     _, head = GitCommandRunner.git(fixture.clone, "rev-parse", f"refs/remotes/pr/{fixture.iid}")
     assert head == fixture.round3_tip

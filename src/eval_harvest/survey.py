@@ -47,7 +47,6 @@ PULL_HEAD_REFSPEC = "+refs/pull/*/head:refs/remotes/pr/*"
 _STATIC_BLOCKER_REMEDIES: dict[str, str] = {
     "no-integration-commit": "the merged PR records no merge commit; there is no before-state to build from — pick another PR",
     "no-changed-paths": "the integration commit touched no files — pick another PR",
-    "no-test-change": "the change touched no test files; harvestable for review, but not for a hidden-test task",
 }
 
 #: The blockers whose remedy is the bulk pull-head fetch — a missing head ref, or a squash with no
@@ -351,7 +350,7 @@ class Survey:
             paths=frozenset(ranges.changed_paths),
             skip=integration,
         )
-        blockers = cls._blockers(pull_request, integration, ranges, have_tip=have_tip, has_tests=bool(tests))
+        blockers = cls._blockers(pull_request, integration, ranges, have_tip=have_tip)
         change_tip_ref = tip_ref if have_tip else ""
         return cls._assemble_row(
             pull_request, tip, change_tip_ref, integration, base, ranges, tests, reverts, repairs_after, blockers
@@ -395,9 +394,7 @@ class Survey:
         return 0
 
     @staticmethod
-    def _blockers(
-        pull_request: dict[str, Any], integration: str, ranges: _RangeFacts, *, have_tip: bool, has_tests: bool
-    ) -> list[str]:
+    def _blockers(pull_request: dict[str, Any], integration: str, ranges: _RangeFacts, *, have_tip: bool) -> list[str]:
         """The mechanical reasons this PR cannot become a task."""
         blockers = []
         merged = pull_request.get("state") == "MERGED"
@@ -407,8 +404,6 @@ class Survey:
             blockers.append("no-pull-head-ref")
         if merged and not ranges.changed_paths:
             blockers.append("no-changed-paths")
-        if not has_tests:
-            blockers.append("no-test-change")
         if len(ranges.parents) == 1 and not have_tip:
             blockers.append("squash-without-change-tip")
         return blockers

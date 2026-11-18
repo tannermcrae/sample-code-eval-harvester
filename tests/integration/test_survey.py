@@ -30,7 +30,7 @@ from fixtures.repo_builder import RepoBuilder
 from eval_harvest.cli import Cli, ExitCode
 from eval_harvest.forge import Forge
 from eval_harvest.gitcmd import GitCommandRunner
-from eval_harvest.survey import PULL_HEAD_REFSPEC, Survey
+from eval_harvest.survey import _FETCH_REMEDY_BLOCKERS, _STATIC_BLOCKER_REMEDIES, PULL_HEAD_REFSPEC, Survey, _RangeFacts
 
 #: The recorded ``gh pr list`` payload templates (tokens substituted with the fixture's real SHAs).
 _SURVEY_PAYLOAD_DIR = Path(__file__).parents[1] / "fixtures" / "gh" / "survey"
@@ -253,10 +253,11 @@ def test_survey_refuses_when_every_pr_is_blocked(
 ) -> None:
     """An online survey where every PR is blocked refuses `no-harvestable-pr` (exit 3), not exit 0 on silence.
 
-    The silence that could be mistaken for "no review history". The reviewed fixture's one PR is
-    blocked by `no-test-change`, so after the (successful) fetch every PR is still blocked.
+    The silence that could be mistaken for "no review history". The clone holds no pull-head ref and
+    `--no-fetch` keeps it that way, so the squash-merged PR is blocked `no-pull-head-ref` and
+    `squash-without-change-tip` — every PR is blocked.
     """
-    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path, pull_head_fetched=False)
     _replay_gh(monkeypatch, fixture, tmp_path)
 
     code = Cli.run(["survey", "--repo", "acme/widgets", "--clone", str(fixture.clone), "--no-fetch"])
@@ -264,8 +265,8 @@ def test_survey_refuses_when_every_pr_is_blocked(
     assert code == ExitCode.REFUSAL
     err = capsys.readouterr().err
     assert "no-harvestable-pr" in err
-    assert "the most common blocker is no-test-change (1 of 1)" in err
-    assert "no test files" in err, "next: must name the dominant blocker's remedy"
+    assert "the most common blocker is no-pull-head-ref (1 of 1)" in err
+    assert Survey.fetch_remedy("origin") in err, "next: must name the dominant blocker's remedy"
 
 
 def test_survey_exits_zero_with_one_clean_pr(
@@ -276,7 +277,7 @@ def test_survey_exits_zero_with_one_clean_pr(
     payload = {
         "repo": "acme/widgets",
         "mainline_commits": 1,
-        "prs": [_row(111, blockers=[]), _row(222, blockers=["no-test-change"])],
+        "prs": [_row(111, blockers=[]), _row(222, blockers=["no-changed-paths"])],
     }
     monkeypatch.setattr(Survey, "fetch_pull_requests", staticmethod(lambda *a, **k: [{}]))
     monkeypatch.setattr(Survey, "build_payload", classmethod(lambda cls, *a, **k: payload))
@@ -288,15 +289,15 @@ def test_survey_exits_zero_with_one_clean_pr(
 
 def test_survey_prints_blocker_histogram_with_remedies(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The human summary prints a `blocked (N)` histogram with per-blocker counts and remedies when any PR is blocked."""
-    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path, pull_head_fetched=False)
     payload = _write_payload("reviewed.json", fixture.clone, fixture, tmp_path)
 
     Cli.run(["survey", "--clone", str(fixture.clone), "--from-json", str(payload), "--summary"])
 
     out = capsys.readouterr().out
     assert "blocked (1)" in out
-    assert "no-test-change" in out
-    assert "no test files" in out, "each histogram row names a remedy"
+    assert "no-pull-head-ref" in out
+    assert Survey.fetch_remedy("origin") in out, "each histogram row names a remedy"
 
 
 def test_no_pull_head_ref_remedy_is_the_real_command() -> None:
@@ -327,19 +328,19 @@ def test_survey_refuses_when_the_fetch_fails(
 
 def test_survey_json_carries_blocker_counts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The `--json` payload carries the documented `blockers` object: name → {count, remedy}."""
-    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path, pull_head_fetched=False)
     payload = _write_payload("reviewed.json", fixture.clone, fixture, tmp_path)
 
     Cli.run(["--json", "survey", "--clone", str(fixture.clone), "--from-json", str(payload)])
 
     parsed = json.loads(capsys.readouterr().out)
-    assert parsed["blockers"]["no-test-change"]["count"] == 1
-    assert "no test files" in parsed["blockers"]["no-test-change"]["remedy"]
+    assert parsed["blockers"]["no-pull-head-ref"]["count"] == 1
+    assert parsed["blockers"]["no-pull-head-ref"]["remedy"] == Survey.fetch_remedy("origin")
 
 
 def test_survey_clean_rows_only_in_table(capsys: pytest.CaptureFixture[str]) -> None:
     """The summary table lists only unblocked, merged PRs — blocked ones appear in the histogram, not the table."""
-    payload = {"repo": "", "mainline_commits": 1, "prs": [_row(111, blockers=[]), _row(222, blockers=["no-test-change"])]}
+    payload = {"repo": "", "mainline_commits": 1, "prs": [_row(111, blockers=[]), _row(222, blockers=["no-changed-paths"])]}
 
     print(Survey.render_summary(payload, branch="main", remote="origin"), end="")
 
@@ -347,3 +348,52 @@ def test_survey_clean_rows_only_in_table(capsys: pytest.CaptureFixture[str]) -> 
     table = out.split("\nblocked (")[0]
     assert "111" in table, "the clean PR is listed in the table"
     assert "222" not in table, "the blocked PR is not in the table (only in the histogram)"
+
+
+# ───────────────────────────── the review survey does not need a test change (TP-7) ─────────────────────────────
+
+
+def test_merged_pr_without_test_change_is_harvestable_for_review(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A merged PR that changes no test file is harvestable for review: a review datapoint needs no tests.
+
+    The reviewed fixture changes ``code.py`` only. Catches the review survey dropping such PRs again —
+    the coding survey owns the test-change exclusion, not this one.
+    """
+    fixture = RepoBuilder.build_squash_merged_pull_request(tmp_path)
+    payload = _write_payload("reviewed.json", fixture.clone, fixture, tmp_path)
+
+    parsed = json.loads(_run_survey_verb(fixture.clone, payload, capsys))
+
+    (row,) = parsed["prs"]
+    assert row["has_test_change"] is False, "the fixture must change no test file, else the test proves nothing"
+    assert row["test_paths"] == []
+    assert row["blockers"] == []
+    assert row["number"] in Survey.harvestable_numbers(parsed)
+
+
+def _blocker_cases() -> list[list[str]]:
+    """`Survey._blockers` over inputs chosen so each mechanical blocker fires at least once."""
+    clean = _RangeFacts(["p1", "p2"], "base", True, 1, ["code.py"], ["code.py"])
+    squash_without_paths = _RangeFacts(["p1"], "", False, 0, [], [])
+    merged = {"state": "MERGED"}
+    return [
+        Survey._blockers(merged, "merge", clean, have_tip=True),
+        Survey._blockers(merged, "", clean, have_tip=True),
+        Survey._blockers(merged, "merge", squash_without_paths, have_tip=False),
+    ]
+
+
+def test_blocker_remedies_cover_only_real_blockers() -> None:
+    """Every `_STATIC_BLOCKER_REMEDIES` key is a blocker `_blockers` can return, and every blocker has a remedy.
+
+    Catches a remedy entry kept for a blocker the code no longer produces (the table is pinned to
+    `_blockers`' output), and a new blocker added without a remedy.
+    """
+    cases = _blocker_cases()
+    produced = {name for blockers in cases for name in blockers}
+
+    assert cases[0] == [], "the clean inputs must produce no blocker"
+    assert produced == {"no-integration-commit", "no-pull-head-ref", "no-changed-paths", "squash-without-change-tip"}
+    never_fires = set(_STATIC_BLOCKER_REMEDIES) - produced
+    assert not never_fires, f"remedy for a blocker that never fires: {never_fires}"
+    assert produced <= set(_STATIC_BLOCKER_REMEDIES) | _FETCH_REMEDY_BLOCKERS, "a blocker with no remedy"

@@ -212,7 +212,7 @@ class TestSurveyCaptureTargets:
 
     def test_capture_from_survey_skips_blocked_prs(self, tmp_path: Path) -> None:
         """A blocked PR is never a target — no forge call wasted on a PR `survey` already ruled out."""
-        survey = _write_survey(tmp_path / "s.json", _row(1, blockers=["no-test-change"]), _row(2, blockers=[]))
+        survey = _write_survey(tmp_path / "s.json", _row(1, blockers=["no-changed-paths"]), _row(2, blockers=[]))
         assert _targets(survey) == [2]
 
     def test_pr_filter_restricts_and_stays_in_payload_order(self, tmp_path: Path) -> None:
@@ -228,7 +228,7 @@ class TestSurveyCaptureTargets:
 
     def test_no_harvestable_pr_refuses(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """An all-blocked payload refuses `no-clean-pr` rather than running an empty, misleading exit-0 batch."""
-        survey = _write_survey(tmp_path / "s.json", _row(1, blockers=["no-test-change"]))
+        survey = _write_survey(tmp_path / "s.json", _row(1, blockers=["no-changed-paths"]))
         assert _targets(survey) is None
         assert "no-clean-pr" in capsys.readouterr().err
 

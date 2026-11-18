@@ -51,15 +51,8 @@
       "reverted_by": [],
       "followup_fixes": [],
       "closed_unmerged": false,
-      "blockers": [
-        "no-test-change"
-      ]
+      "blockers": []
     }
   ],
-  "blockers": {
-    "no-test-change": {
-      "count": 1,
-      "remedy": "the change touched no test files; harvestable for review, but not for a hidden-test task"
-    }
-  }
+  "blockers": {}
 }
