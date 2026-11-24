@@ -4,7 +4,7 @@ title: "[Eval] Measure the coding survey yield on real repositories"
 summary: "Run the coding survey on 1–2 real repositories and a 1000-PR benchmark, then set the open size and speed targets."
 feature: coding-eval-harvest
 workstream: Eval
-status: todo
+status: in-progress
 complexity: M
 merges: [G-2]
 implements: [NFR-3, NFR-5]

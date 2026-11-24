@@ -26,7 +26,7 @@ and `G-2` here is §13 `G-1`.
 | [E-1](E-1-add-the-static-coding-checks-to-verify.md) | [Verify] Add the static coding checks to verify | Make `verify` read the datapoint type. Add each coding check that reads files only: leak scans, uniform instruction, answer placement, spec checks. | done | A-2, D-1 | L |
 | [E-2](E-2-resolve-hidden-tests-proven-and-add-the-guard-tests.md) | [Verify] Resolve hidden-tests-proven and add the guard tests | Read the proof file of the runner in `verify`. Then break each new coding check on purpose and watch it fail. | done | D-1, E-1 | M |
 | [F-1](F-1-add-the-per-type-dataset-report-and-the-coding-help.md) | [Dataset] Add the per-type dataset report and the coding help | Count review tasks and coding tasks separately in the dataset report. Teach the coding method in the help and the man page. | done | A-1, A-2, B-1, C-1, C-2, D-2, E-2 | L |
-| [G-1](G-1-measure-the-coding-survey-yield-on-real-repositories.md) | [Eval] Measure the coding survey yield on real repositories | Run the coding survey on 1–2 real repositories and on a 1000-PR benchmark. Set the open size and speed targets. | todo | B-1 | M |
+| [G-1](G-1-measure-the-coding-survey-yield-on-real-repositories.md) | [Eval] Measure the coding survey yield on real repositories | Run the coding survey on 1–2 real repositories and on a 1000-PR benchmark. Set the open size and speed targets. | in-progress | B-1 | M |
 | [G-2](G-2-add-the-coding-kill-criterion-objective.md) | [Eval] Add the coding kill-criterion objective | Add one coding objective to the eval harness. An agent with only the help tries to build a coding datapoint. | todo | F-1 | M |
 
 ## Dependency Graph
