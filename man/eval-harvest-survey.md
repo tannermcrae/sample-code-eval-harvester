@@ -50,6 +50,18 @@ enumerating; harvesting is impossible without it, and `--no-fetch` opts out. Whe
 blocked, `survey` refuses `no-harvestable-pr` and prints a blocker histogram naming, for each
 blocker, how many PRs it stops and the one command that unblocks the most — never an empty table.
 
+## CODING DATAPOINTS (--type coding)
+
+A coding datapoint comes from a merged fix with tests, not from review iteration. The first run,
+`survey --type coding --clone <dir> --repo <org/name> --dataset <dir>`, reads the merged PRs once,
+excludes each fix that cannot become a task (no source change, no test change, too few or too many
+source lines, too many files, a bot author), ranks the rest, saves the result to
+`survey/fix-survey.json`, and prints page 1. Read the next pages with `--page <n>` and `--page-size
+<k>` (1 to 50): a page request reads the saved survey only, so it makes no forge call and no git
+call, and a long history never fills your context. `--excluded` pages through the excluded PRs with
+the reason for each. When no fix is harvestable, `survey` refuses `no-harvestable-fix` with the most
+common reason in plain words, never an empty table.
+
 ## EXIT STATUS
 
 `3` (refusal) with `no-review-iteration` when no PR went through review, `no-harvestable-pr` when
@@ -57,4 +69,4 @@ every PR is blocked, or `pull-head-fetch-failed` when the pull-head fetch could 
 
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-capture(1)`.
+`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-coding(7)`.

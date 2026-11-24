@@ -43,6 +43,7 @@ from typing import Any
 
 import pydantic
 import pytest
+from fixtures.coding_task import CodingTaskBuilder
 from fixtures.fix_dataset import FixDatasetBuilder
 from fixtures.repo_builder import RepoBuilder
 
@@ -243,14 +244,37 @@ def test_real_harbor_validates_the_emitted_manifest(emitted_dataset: Path) -> No
 
 @requires_real_harbor
 def test_real_harbor_loads_the_written_registry(emitted_dataset: Path) -> None:
-    """`Registry.from_path` loads the written `registry.json` — the `harbor run --registry-path` input (TP-8)."""
+    """`Registry.from_path` loads the written `registry.json` — the `harbor run --registry-path` input (TP-8).
+
+    A review-only dataset has the combined entry and the review entry (FR-34), each with the one task.
+    """
     task_dir = _only_task_dir(emitted_dataset)
 
     registry = Registry.from_path(emitted_dataset / "registry.json")
 
-    (dataset,) = registry.datasets
-    assert len(dataset.tasks) == 1
-    assert dataset.tasks[0].name == task_dir.name, "the registry task is not the emitted directory"
+    assert [dataset.name for dataset in registry.datasets] == ["our-repo", "our-repo-review"]
+    for dataset in registry.datasets:
+        assert len(dataset.tasks) == 1
+        assert dataset.tasks[0].name == task_dir.name, "the registry task is not the emitted directory"
+
+
+@requires_real_harbor
+def test_real_harbor_loads_a_mixed_registry(emitted_dataset: Path, tmp_path: Path) -> None:
+    """Harbor 0.22.0 loads a mixed-type `registry.json` and lists all three entries, each with its own tasks (FR-34)."""
+    mixed = tmp_path / "mixed"
+    shutil.copytree(emitted_dataset, mixed)
+    review_task = _only_task_dir(emitted_dataset).name
+    coding_fixture = CodingTaskBuilder.build(tmp_path / "coding")
+    shutil.copytree(coding_fixture.task_dir, mixed / "tasks" / coding_fixture.task_dir.name)
+    Dataset.build_dataset(mixed)
+
+    registry = Registry.from_path(mixed / "registry.json")
+
+    tasks_by_entry = {dataset.name: sorted(task.name for task in dataset.tasks) for dataset in registry.datasets}
+    assert list(tasks_by_entry) == ["our-repo", "our-repo-review", "our-repo-coding"]
+    assert tasks_by_entry["our-repo"] == sorted([review_task, coding_fixture.task_dir.name])
+    assert tasks_by_entry["our-repo-review"] == [review_task]
+    assert tasks_by_entry["our-repo-coding"] == [coding_fixture.task_dir.name]
 
 
 # ───────────────────────────── the assertions above have teeth ─────────────────────────────
@@ -288,7 +312,7 @@ def test_harbor_registry_loader_rejects_a_bare_object(emitted_dataset: Path, tmp
     A dict is iterable: Harbor iterates its key strings and `DatasetSpec` refuses each one, so the
     error is a `pydantic.ValidationError`, not a generic failure.
     """
-    (entry,) = json.loads((emitted_dataset / "registry.json").read_text(encoding="utf-8"))
+    entry, *_ = json.loads((emitted_dataset / "registry.json").read_text(encoding="utf-8"))
     bare_object = tmp_path / "registry.json"
     bare_object.write_text(json.dumps(entry), encoding="utf-8")
 

@@ -51,7 +51,14 @@ per comment, on demand. It vends facts and the fill contract only, and **suggest
 classification**: the judgment is yours. The field-by-field fill contract is the same one
 `eval-harvest-capture(1)` prints under its CANDIDATE FILE section.
 
+## CODING DATAPOINTS
+
+`brief candidates/fix-<n>.json` reads the type from the candidate and prints the coding brief: the
+identity, the issue text, the sizes of the fix, its test paths, the slot contract, and the next
+commands. It prints no patch bytes; read the fix one file at a time with `show --path`. One fix, one
+brief, one fresh context, as for review.
+
 ## SEE ALSO
 
 `eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-show(1)`, `eval-harvest-annotate(1)`,
-`eval-harvest-emit(1)`.
+`eval-harvest-emit(1)`, `eval-harvest-coding(7)`.

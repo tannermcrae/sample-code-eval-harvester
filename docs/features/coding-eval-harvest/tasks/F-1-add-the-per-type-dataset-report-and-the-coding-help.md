@@ -4,7 +4,7 @@ title: "[Dataset] Add the per-type dataset report and the coding help"
 summary: "Count review and coding tasks apart in the dataset report, and teach the coding method in the help."
 feature: coding-eval-harvest
 workstream: Dataset
-status: in-progress
+status: done
 complexity: L
 merges: [F-1, F-2]
 implements: [FR-1, FR-2, FR-3, FR-22, FR-32, FR-33, FR-34, TP-4]
@@ -231,21 +231,21 @@ Manual checks:
 
 ## Acceptance Criteria
 
-- [ ] A dataset with 2 review tasks and 3 coding tasks (no proof files) reports `review: 2, coding: 3, coding_unproven: 3`.
-- [ ] A coding task with no `change_risk_*` fields does not cause a refusal. A review task without them still causes `malformed-task`.
-- [ ] After one coding refusal and one review refusal, the report lists one reason under each type.
-- [ ] `registry.json` has the entries `<short>`, `<short>-review`, `<short>-coding` in that order, and Harbor 0.22.0 loads them all.
-- [ ] The written `metric.py` calculates each mean over the tasks of its own type only.
-- [ ] The report prints one `harbor run` command for each type, and the dilution warning next to the combined command.
-- [ ] For a review-only dataset, the existing `--json` keys have the same values as before.
-- [ ] `--help` for `survey`, `capture`, `brief`, `show`, `annotate`, `emit`, `verify`, and `dataset` has a coding section after the review methodology.
-- [ ] The top-level help and `man/eval-harvest.md` have the table of the two types.
-- [ ] `man/eval-harvest-coding.md` has a sentence for each FR-1 item and each worthless property, and keeps the PROOF FILE section from E-2.
-- [ ] The FR-3 sentence and the FR-22 `uv` example are in the help and in the man pages.
-- [ ] The help says that a coding datapoint is unproven until a runner writes a valid proof file.
-- [ ] Each existing review phrase test passes without change.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
+- [x] A dataset with 2 review tasks and 3 coding tasks (no proof files) reports `review: 2, coding: 3, coding_unproven: 3`.
+- [x] A coding task with no `change_risk_*` fields does not cause a refusal. A review task without them still causes `malformed-task`.
+- [x] After one coding refusal and one review refusal, the report lists one reason under each type.
+- [x] `registry.json` has the entries `<short>`, `<short>-review`, `<short>-coding` in that order, and Harbor 0.22.0 loads them all.
+- [x] The written `metric.py` calculates each mean over the tasks of its own type only.
+- [x] The report prints one `harbor run` command for each type, and the dilution warning next to the combined command.
+- [x] For a review-only dataset, the existing `--json` keys have the same values as before.
+- [x] `--help` for `survey`, `capture`, `brief`, `show`, `annotate`, `emit`, `verify`, and `dataset` has a coding section after the review methodology.
+- [x] The top-level help and `man/eval-harvest.md` have the table of the two types.
+- [x] `man/eval-harvest-coding.md` has a sentence for each FR-1 item and each worthless property, and keeps the PROOF FILE section from E-2.
+- [x] The FR-3 sentence and the FR-22 `uv` example are in the help and in the man pages.
+- [x] The help says that a coding datapoint is unproven until a runner writes a valid proof file.
+- [x] Each existing review phrase test passes without change.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9). `[project].dependencies` stays empty (NFR-6).
 
 ## Out Of Scope
 
@@ -279,3 +279,49 @@ Manual checks:
 
 **Blocked by:** [A-1](A-1-fix-the-two-existing-survey-and-registry-defects.md), [A-2](A-2-add-the-shared-prerequisites-for-coding-datapoints.md), [B-1](B-1-add-the-paged-coding-survey.md), [C-1](C-1-add-the-coding-candidate-and-capture-type-coding.md), [C-2](C-2-add-coding-views-to-brief-show-and-annotate.md), [D-2](D-2-assemble-and-promote-coding-tasks-with-emit-kind-fix.md), [E-2](E-2-resolve-hidden-tests-proven-and-add-the-guard-tests.md)
 **Blocks:** [G-2](G-2-add-the-coding-kill-criterion-objective.md)
+
+## Completion Log
+
+**Completed:** 2026-11-24  ·  **Branch:** `per-type-dataset-report-coding-help-f-1`  ·  **Commit:** see the `[F-1]` commit on `main`
+
+**What was implemented:** `dataset` now reads `[metadata.harvest].datapoint_type` (missing = review,
+anything else but `coding` refuses `malformed-task`). It counts risk and severity over review tasks
+only, and reports the count of each type, the unproven coding tasks (judged by
+`Verify.check_hidden_tests_proven` on `proofs/<task-dir>.json`), the refusal reasons of each type
+(from `RefusalLog.read_all`; a broken record refuses `malformed-refusal`), and one `harbor run`
+command for each registry entry. `registry.json` lists `<short>`, `<short>-review`, and
+`<short>-coding` (an entry only for a type that has tasks), and `metric.py` is the per-type script.
+Every coding verb's `--help` and man page has a coding section after the review methodology. The
+top-level help and man page have the type table, and `man/eval-harvest-coding.md` is a full page
+around E-2's PROOF FILE section.
+
+**Files changed:**
+- `src/eval_harvest/dataset.py` — the per-type record, report, registry entries, metric, run commands, and refusals.
+- `src/eval_harvest/cli.py` — the coding sections in `VERB_METHODOLOGY`, the `Datapoint types:` table in `TOP_LEVEL_METHODOLOGY`, the parser description, and the summaries for `survey`, `capture`, and `dataset`.
+- `man/eval-harvest.md`, `man/eval-harvest-{survey,capture,brief,show,annotate,emit,verify,dataset}.md` — the coding sections (generated from the rendered help, so the words match), the type table, and the SEE ALSO entries.
+- `man/eval-harvest-coding.md` — SYNOPSIS, DESCRIPTION, METHODOLOGY, TASK SHAPE, EXIT STATUS, and SEE ALSO. PROOF FILE is byte-for-byte unchanged.
+- `tests/integration/test_dataset.py` — the coding cases from Tests To Write, plus an E2E `Cli.run(["--json", "dataset", ...])` case; the registry, metric, and determinism tests were updated.
+- `tests/integration/test_harbor_loader_contract.py` — the review-only registry now has two entries; added `test_real_harbor_loads_a_mixed_registry`.
+- `tests/integration/test_help_methodology.py` — `CODING_METHODOLOGY_PHRASES`, `TestCodingHelp`, and `TestCodingManPages`.
+- `tests/unit/test_dataset_name.py` — the new `_TaskRecord` fields in its fixture record (needed for the type check).
+
+**Acceptance criteria:** Each one is covered by a named test in `test_dataset.py`,
+`test_harbor_loader_contract.py` (run with `mise run test-harbor`: 95 passed, none skipped), or
+`test_help_methodology.py`. The FR-32 case also ran by hand through the installed CLI
+(`uv run eval-harvest --json dataset --dataset <2 review + 3 coding>` gives review 2, coding 3,
+unproven 3, and the three entries in order). Each new guard was broken on purpose and seen to fail,
+then reverted: an unknown type read as review, every coding task counted as unproven, coding tasks
+counted in the risk buckets, coding tasks put in the review entry, a task-shape line removed from
+the help, an invented `--bogus` flag, a reworded FR-3 sentence in the man page, and a renamed PROOF
+FILE heading. `mise run check`: 979 passed, 1 skipped (the network e2e test, because GitHub returned 502).
+
+**Deviations from the task:**
+- `brief` has the heading `Coding datapoints:`, not `(--type coding)`. Its parser has no `--type` flag (it reads the type from the candidate), and the task says to copy flags from the parser.
+- SEE ALSO entries say `eval-harvest-coding(7)`, the section number E-2's page declares, not `(1)`.
+- The type table is in its own `Datapoint types:` / `## DATAPOINT TYPES` section after the review methodology, not inside it.
+- The `harbor run` form was checked against the Harbor 0.22.0 source, which resolves the TODO in step 11. `--registry-path <file>` takes the file or its directory, and a bare `--dataset <name>` resolves the entry's only version (`JsonRegistryClient._get_dataset_metadata`). The path is printed as the CLI received it, with forward slashes (`as_posix`, NFR-10).
+- The phrase tests compare with whitespace collapsed, because the help wraps by hand at 100 columns and the exact FR-3 sentence cannot fit on one line.
+
+**Follow-ups noticed but not done:**
+- `Emit._ship_metric_script` still writes the review-only `metric.py` after each review emit, until `dataset` runs again (by design, per the gotcha).
+- The worktree venv resolved Python 3.14, not the 3.12 pin. This was already the case and is outside this task.

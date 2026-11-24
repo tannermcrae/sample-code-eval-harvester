@@ -166,6 +166,25 @@ A PR whose reviewed states were all force-pushed away cannot be harvested; `capt
 up front, and for a PR that survives reports which kinds remain buildable. The candidate is still
 written for the record when it refuses, so you can see what the forge returned.
 
+## CODING DATAPOINTS (--type coding)
+
+`capture <pr> --type coding --clone <dir> --dataset <dir>` (or `--from-survey <file>` for a batch)
+writes `candidates/fix-<n>.json`: mechanical facts only (the merge and base commits, the linked
+issues, the fix split into a source patch and a test patch) and blank slots for you to fill. No risk
+map is needed. It refuses `fix-base-unrecoverable` when the base commit is not in the clone, and
+`no-source-change` when the fix changes only tests. A coding task has this shape, item by item:
+
+- instruction style: an instruction in the style of an issue that names the symptom, not the file or
+  the symbol.
+- base commit: the first parent of the merge commit, the code before the fix.
+- oracle fix: the source part of the merged fix, only in `solution/`, which the agent cannot read.
+- fail-to-pass: a test that fails at the base and passes with the oracle.
+- pass-to-pass: a test that passes at the base and with the oracle.
+- validation spec: `tests/validate/validation_spec.toml`, stories with cases.
+- task rubric: criteria of kind `fail_to_pass` or `pass_to_pass`.
+- taste judge: an LLM judge that compares the patch to the reference and to good practice.
+- patch bloat: a penalty for changes that the fix does not need.
+
 ## BATCH MODE
 
 **Harvest a set, not one PR.** The job is ten PRs, so a driver that captures them with a shell loop
@@ -193,4 +212,4 @@ stderr, one line per PR, so `--json` stdout stays parseable.
 
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-emit(1)`.
+`eval-harvest(1)`, `eval-harvest-emit(1)`, `eval-harvest-coding(7)`.

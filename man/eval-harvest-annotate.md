@@ -63,6 +63,19 @@ Run `annotate --check` to validate the candidate as it stands and list what is s
 exits non-zero while any slot remains, so a driver can loop until clean. The field-by-field contract
 for every slot is in the CANDIDATE FILE section of `eval-harvest-capture(1)`.
 
+## CODING DATAPOINTS
+
+A coding candidate takes four record shapes: `{"slot": <name>, "value": <text>}` for the text slots
+instruction, instruction_rationale, and tooling_note; `{"hidden_test": {...}}`;
+`{"rubric_criterion": {...}}`; and `{"environment": {...}}`. A hidden test names repo_path, name,
+kind (fail_to_pass or pass_to_pass), origin (pr or agent), and evidence; write its file under
+`candidates/fix-<n>/hidden/<repo_path>`. Hidden tests must test behavior through public interfaces;
+they must not pin implementation details of the oracle fix. A test that pins a helper name or an
+internal call fails a correct patch that differs from the oracle. Keep the pass-to-pass tests: they
+catch a patch that fixes the issue and breaks something else. Pass `--replace-hidden-tests` to
+restate the list, and run `annotate --check` until it is clean.
+
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-show(1)`, `eval-harvest-emit(1)`.
+`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-show(1)`, `eval-harvest-emit(1)`,
+`eval-harvest-coding(7)`.

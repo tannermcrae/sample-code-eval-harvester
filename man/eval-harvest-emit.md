@@ -76,6 +76,31 @@ verified** until you run `eval-harvest verify <task-dir>` (with `--clone`) where
 `emit` names each unresolved check with its reason rather than claiming "all checks passed", and the
 `--json` payload carries a `checks` object (`passed`, `unresolved`) so a driver can gate on it.
 
+## CODING DATAPOINTS (--kind fix)
+
+`emit `candidates/fix-<n>.json` --kind fix`, or `emit --all --kind fix --dataset <dir>`, builds a
+coding task; `--iteration` does not apply to it. A coding task has this shape, item by item:
+
+- instruction style: an instruction in the style of an issue that names the symptom, not the file or
+  the symbol.
+- base commit: the first parent of the merge commit, the code before the fix.
+- oracle fix: the source part of the merged fix, only in `solution/`, which the agent cannot read.
+- fail-to-pass: a test that fails at the base and passes with the oracle.
+- pass-to-pass: a test that passes at the base and with the oracle.
+- validation spec: `tests/validate/validation_spec.toml`, stories with cases.
+- task rubric: criteria of kind `fail_to_pass` or `pass_to_pass`.
+- taste judge: an LLM judge that compares the patch to the reference and to good practice.
+- patch bloat: a penalty for changes that the fix does not need.
+
+You write the environment recipe, for any language. base_image must be in `public.ecr.aws/`;
+setup_steps is one line for each setup step (each becomes one RUN line); lockfile names a file in
+`candidates/fix-<n>/`. Pin dependencies to merge_date, so that an old base still builds; for Python:
+`uv pip compile --exclude-newer <merge_date>`. test_command must write JUnit XML to `$JUNIT_PATH`,
+and pytest needs `-o junit_family=xunit1` so that each `<testcase>` has a `file` attribute (the
+verifier matches hidden tests by it). `emit` refuses `environment-recipe-invalid`,
+`hidden-test-file-missing`, or `no-fail-to-pass-test` before it writes, then runs `verify`.
+`hidden-tests-proven` stays unresolved until a runner proves it.
+
 ## BATCH MODE
 
 **Emit a whole dataset with `--all`.** `emit --all --kind <kind>` emits every candidate under
@@ -103,4 +128,4 @@ when any candidate was refused (a partial batch exits 3), `0` only when every ca
 
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-verify(1)`.
+`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-verify(1)`, `eval-harvest-coding(7)`.

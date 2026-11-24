@@ -8,6 +8,7 @@ back to a bare flag list fails here, catching the kill-criterion regression (PRD
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from eval_harvest.candidate import CommentDict, FindingDict
@@ -213,3 +214,203 @@ class TestCandidateFileDocumented:
             assert "candidate file" in man_text and "eval-harvest-capture(1)" in man_text, (
                 f"the {verb} man page must cross-reference capture's CANDIDATE FILE section"
             )
+
+
+# ───────────────────────────── coding datapoints (FR-1, FR-2, FR-3, FR-22) ─────────────────────────────
+
+#: The heading of each coding verb's coding section, after its review methodology (task F-1 step 15).
+#: `brief` takes no `--type` flag (it reads the type from the candidate), so it has the plain heading.
+CODING_SECTION_HEADINGS: dict[str, str] = {
+    "survey": "Coding datapoints (--type coding):",
+    "capture": "Coding datapoints (--type coding):",
+    "brief": "Coding datapoints:",
+    "show": "Coding datapoints:",
+    "annotate": "Coding datapoints:",
+    "emit": "Coding datapoints (--kind fix):",
+    "verify": "Coding datapoints:",
+    "dataset": "Coding datapoints:",
+}
+
+#: The FR-3 sentence, pinned exactly: hidden tests that pin oracle details fail correct patches.
+BEHAVIORAL_TESTS_SENTENCE = (
+    "Hidden tests must test behavior through public interfaces; they must not pin implementation details of the oracle fix."
+)
+
+#: The FR-1 task-shape items, one sentence each, in `capture --help`, `emit --help`, and the coding man page.
+TASK_SHAPE_SENTENCES: tuple[str, ...] = (
+    "an instruction in the style of an issue that names the symptom, not the file or the symbol",
+    "the first parent of the merge commit",
+    "the source part of the merged fix, only in `solution/`",
+    "a test that fails at the base and passes with the oracle",
+    "a test that passes at the base and with the oracle",
+    "`tests/validate/validation_spec.toml`, stories with cases",
+    "criteria of kind `fail_to_pass` or `pass_to_pass`",
+    "an LLM judge that compares the patch to the reference and to good practice",
+    "a penalty for changes that the fix does not need",
+)
+
+#: The FR-1 properties that make a coding datapoint worthless, in `verify --help` and the coding man page.
+WORTHLESS_PROPERTIES: tuple[str, ...] = (
+    "a fail-to-pass test passes at the base",
+    "the instruction names a changed path or symbol",
+    "the general instructions are not the same in all tasks",
+    "the answer is in a file that the agent can read",
+    "the hidden tests pin details of the oracle",
+)
+
+#: The FR-22 dependency-pin and test-command teaching.
+ENVIRONMENT_RECIPE_PHRASES: tuple[str, ...] = (
+    "Pin dependencies to merge_date",
+    "uv pip compile --exclude-newer <merge_date>",
+    "one line for each setup step",
+    "public.ecr.aws/",
+    "test_command must write JUnit XML to `$JUNIT_PATH`",
+    "-o junit_family=xunit1",
+)
+
+#: The §15 unproven-datapoint teaching, in `verify --help` and `dataset --help`.
+UNPROVEN_PHRASES: tuple[str, ...] = ("`hidden-tests-proven` stays unresolved", "`proofs/<task-dir>.json`", "--proof")
+
+#: Phrases each verb's coding section must teach, in its `--help` *and* its man page. Matched
+#: case-insensitively with whitespace collapsed, because the help is hand-wrapped at 100 columns and
+#: the man page wraps differently — the contract pins the words, not the line breaks.
+CODING_METHODOLOGY_PHRASES: dict[str, tuple[str, ...]] = {
+    "survey": (
+        "--type coding",
+        "--page <n>",
+        "--page-size <k>",
+        "--excluded",
+        "no-harvestable-fix",
+        "no forge call and no git call",
+    ),
+    "capture": ("--type coding", "fix-base-unrecoverable", "no-source-change", *TASK_SHAPE_SENTENCES),
+    "brief": ("coding brief", "no patch bytes", "show --path"),
+    "show": ("--path <file>", "one repository path", "unknown-path"),
+    "annotate": (BEHAVIORAL_TESTS_SENTENCE, "hidden_test", "rubric_criterion", "--replace-hidden-tests", "pass-to-pass"),
+    "emit": ("--kind fix", *TASK_SHAPE_SENTENCES, *ENVIRONMENT_RECIPE_PHRASES, "environment-recipe-invalid"),
+    "verify": ("worthless", *WORTHLESS_PROPERTIES, *UNPROVEN_PHRASES, "unproven until a runner writes a valid proof file"),
+    "dataset": (*UNPROVEN_PHRASES, "counts as unproven", "per-type `harbor run` commands", "missing reward key as 0"),
+}
+
+#: The flags each coding section teaches; every one must exist in that verb's parser.
+CODING_FLAGS_BY_VERB: dict[str, tuple[str, ...]] = {
+    "survey": ("--type", "--page", "--page-size", "--excluded", "--clone", "--repo", "--dataset"),
+    "capture": ("--type", "--from-survey", "--clone", "--dataset"),
+    "brief": (),
+    "show": ("--path", "--comment"),
+    "annotate": ("--replace-hidden-tests", "--check"),
+    "emit": ("--kind", "--all", "--dataset", "--iteration"),
+    "verify": ("--proof",),
+    "dataset": (),
+}
+
+CODING_MAN_PAGE = MAN_DIR / "eval-harvest-coding.md"
+
+_FLAG_PATTERN = re.compile(r"(?<![\w-])--[a-z][a-z-]*")
+
+#: Flags of other tools that a coding section quotes in a command line (`uv pip compile --exclude-newer`).
+_OTHER_TOOL_FLAGS: frozenset[str] = frozenset({"--exclude-newer"})
+
+
+def _normalized(text: str) -> str:
+    """`text` lowercased with every whitespace run collapsed to one space (hand-wrapped prose matches)."""
+    return " ".join(text.split()).lower()
+
+
+def _coding_section(verb: str) -> str:
+    """The coding section of a verb's `--help`: from its heading to the next blank line or the end."""
+    help_text = Cli.help_for(verb)
+    heading = CODING_SECTION_HEADINGS[verb]
+    assert heading in help_text, f"{verb} --help has no {heading!r} section"
+    return help_text.split(heading, 1)[1].split("\n\n", 1)[0]
+
+
+def _parser_flags(verb: str | None) -> set[str]:
+    """The flags a parser accepts, read from its rendered help before the methodology (no argparse internals)."""
+    options = Cli.help_for(verb).split("Methodology:", 1)[0]
+    return set(_FLAG_PATTERN.findall(options))
+
+
+class TestCodingHelp:
+    """Each coding verb's help teaches the coding method after the review methodology (FR-1, FR-2, FR-3, FR-22)."""
+
+    def test_each_coding_verb_help_has_coding_section(self) -> None:
+        for verb, phrases in CODING_METHODOLOGY_PHRASES.items():
+            help_text = Cli.help_for(verb)
+            heading = CODING_SECTION_HEADINGS[verb]
+            assert heading in help_text, f"{verb} --help has no {heading!r} section"
+            assert help_text.index("Methodology:") < help_text.index(heading), (
+                f"{verb}: the coding section is before the review text"
+            )
+            section = _normalized(_coding_section(verb))
+            for phrase in phrases:
+                assert _normalized(phrase) in section, f"{verb} --help coding section is missing {phrase!r}"
+
+    def test_top_level_help_has_type_table(self) -> None:
+        help_lines = Cli.help_for(None).splitlines()
+        rows = {line.split()[0]: line for line in help_lines if line.startswith(("  review  ", "  coding  "))}
+        assert set(rows) == {"review", "coding"}, "the top-level help has no review/coding type table"
+        assert "a PR change at one review round" in rows["review"]
+        assert "approve or reject" in rows["review"]
+        assert "an issue-style instruction at" in rows["coding"]
+        assert "a patch that fixes the" in rows["coding"]
+        table = _normalized(Cli.help_for(None).split("Datapoint types:", 1)[1].split("Sample input restriction", 1)[0])
+        for header in ("the agent under test receives", "it must produce", "what scores it"):
+            assert header in table
+        for scorer in ("hidden tests", "validation", "rubric", "taste judge", "patch bloat", "the human verdict"):
+            assert scorer in table, f"the type table does not name {scorer!r}"
+
+    def test_help_requires_behavioral_tests(self) -> None:
+        assert _normalized(BEHAVIORAL_TESTS_SENTENCE) in _normalized(_coding_section("annotate"))
+        assert BEHAVIORAL_TESTS_SENTENCE in " ".join(CODING_MAN_PAGE.read_text(encoding="utf-8").replace("**", "").split())
+
+    def test_help_gives_exclude_newer_example(self) -> None:
+        assert "uv pip compile --exclude-newer <merge_date>" in Cli.help_for("emit")
+
+    def test_help_says_coding_is_unproven_without_proof(self) -> None:
+        for verb in ("verify", "dataset"):
+            section = _normalized(_coding_section(verb))
+            assert "`hidden-tests-proven` stays unresolved" in section, f"{verb} --help does not say coding is unproven"
+            assert "unproven" in section
+
+    def test_coding_flags_in_help_exist_in_parser(self) -> None:
+        every_flag = set().union(*(_parser_flags(verb) for verb in Cli.VERBS), _parser_flags(None))
+        for verb, flags in CODING_FLAGS_BY_VERB.items():
+            section = _coding_section(verb)
+            own_flags = _parser_flags(verb)
+            for flag in flags:
+                assert flag in section, f"{verb} coding section does not teach {flag}"
+                assert flag in own_flags, f"{verb} coding section teaches {flag}, which its parser does not have"
+            for flag in set(_FLAG_PATTERN.findall(section)) - _OTHER_TOOL_FLAGS:
+                assert flag in every_flag, f"{verb} coding section names {flag}, which no parser has"
+
+
+class TestCodingManPages:
+    """The man pages carry the same coding method as the help, and the coding page teaches the task shape."""
+
+    def test_coding_man_pages_carry_coding_phrases(self) -> None:
+        for verb, phrases in CODING_METHODOLOGY_PHRASES.items():
+            man_text = _normalized(_man_page_for(verb).read_text(encoding="utf-8"))
+            assert "## coding datapoints" in man_text, f"{_man_page_for(verb).name} has no CODING DATAPOINTS section"
+            assert "eval-harvest-coding(7)" in man_text, f"{_man_page_for(verb).name} does not point at eval-harvest-coding(7)"
+            for phrase in phrases:
+                assert _normalized(phrase) in man_text, f"{_man_page_for(verb).name} is missing coding phrase {phrase!r}"
+
+    def test_coding_man_page_teaches_task_shape(self) -> None:
+        man_text = _normalized(CODING_MAN_PAGE.read_text(encoding="utf-8").replace("**", ""))
+        # The page formats names as code where the help leaves them plain, so the items match without backticks.
+        unformatted = man_text.replace("`", "")
+        for sentence in (*TASK_SHAPE_SENTENCES, *WORTHLESS_PROPERTIES, *ENVIRONMENT_RECIPE_PHRASES):
+            assert _normalized(sentence).replace("`", "") in unformatted, f"eval-harvest-coding.md is missing {sentence!r}"
+        for section in ("## synopsis", "## description", "## methodology", "## task shape", "## exit status", "## see also"):
+            assert section in man_text, f"eval-harvest-coding.md has no {section!r} section"
+        # E-2's section stays, word for word in its key sentences: runner authors read it.
+        assert "## proof file (for runner authors)" in man_text
+        assert "`verify` trusts the runner: the digest stops a stale proof, not a false one." in man_text
+
+    def test_top_level_man_page_has_type_table(self) -> None:
+        man_text = _man_page_for(None).read_text(encoding="utf-8")
+        assert "| review | a PR change at one review round | approve or reject, plus findings |" in man_text
+        assert "| coding | an issue-style instruction at the base commit | a patch that fixes the issue |" in man_text
+        assert "PR-review and coding" in man_text
+        assert "`eval-harvest-coding(7)`" in man_text

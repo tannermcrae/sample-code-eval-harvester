@@ -18,10 +18,12 @@ def _record(origin_repo: str) -> _TaskRecord:
         directory="unused",
         origin_repo=origin_repo,
         content_digest="sha256:" + "0" * 64,
+        datapoint_type="review",
         change_risk_structural="low",
         change_risk_classified="low",
         change_risk_disagreement=False,
         finding_severities=(),
+        harvest={},
     )
 
 

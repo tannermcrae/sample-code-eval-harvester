@@ -47,10 +47,27 @@ section; `capture` records `in_diff_iterations` so you can see the answer before
 A failure is an instruction to act on: it names the check, the datapoint, the offending content, and
 the next command. Fix the datapoint and re-run.
 
+## CODING DATAPOINTS
+
+`verify` reads the type from `task.toml` and adds the coding checks. A coding datapoint is worthless
+when any of these is true:
+
+- a fail-to-pass test passes at the base (it proves nothing about the fix);
+- the instruction names a changed path or symbol (`instruction-names-fix`);
+- the general instructions are not the same in all tasks (`instruction-not-uniform`);
+- the answer is in a file that the agent can read (`answer-misplaced`);
+- the hidden tests pin details of the oracle, so a correct, different fix fails them.
+
+The last is yours to prevent (see `annotate --help`); `verify` checks the others. The CLI never runs
+the repository's code, so `hidden-tests-proven` stays unresolved (exit 5) until a runner runs the
+task with the nop and oracle agents and writes `proofs/<task-dir>.json`. Pass `--proof <file>` to
+read another file. A coding datapoint is unproven until a runner writes a valid proof file; the
+proof-file schema is in `man eval-harvest-coding`.
+
 ## EXIT STATUS
 
 `0` pass · `4` a check failed · `5` a check was unresolved (runtime absent).
 
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-emit(1)`.
+`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-emit(1)`, `eval-harvest-coding(7)`.

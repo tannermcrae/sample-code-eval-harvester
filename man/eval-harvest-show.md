@@ -49,6 +49,13 @@ By default `show` renders the first iteration whose diff covers the line; pass `
 how that line looked in another review round, and `--context` to widen or narrow the surrounding
 lines. `show` makes no judgment and writes nothing.
 
+## CODING DATAPOINTS
+
+For a coding candidate, `show `candidates/fix-<n>.json` --path <file>` prints the hunks of the
+merged fix for one repository path, in place of `--comment`. Read only the files you need to write
+the instruction and to pick the hidden tests. A path the fix does not change refuses `unknown-path`
+and lists the changed paths.
+
 ## SEE ALSO
 
-`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-emit(1)`.
+`eval-harvest(1)`, `eval-harvest-capture(1)`, `eval-harvest-emit(1)`, `eval-harvest-coding(7)`.

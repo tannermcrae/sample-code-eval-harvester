@@ -2,7 +2,8 @@
 
 ## NAME
 
-**eval-harvest** — build Harbor PR-review eval datapoints from a repository's PR history.
+**eval-harvest** — build Harbor eval datapoints (PR-review and coding) from a repository's PR
+history.
 
 ## SYNOPSIS
 
@@ -60,6 +61,18 @@ You build the **rubric** and the **risk map** before any datapoint. The workflow
 5. `emit <candidate> --kind reject|approve` builds and verifies each datapoint.
 6. `dataset` assembles the manifest and reports the risk distribution.
 
+## DATAPOINT TYPES
+
+This CLI builds two **datapoint types** from the same PR history. A review datapoint scores a review
+agent; a coding datapoint scores a coding agent on a merged fix. Pass `--type coding` to `survey` and
+`capture`, and `--kind fix` to `emit`; the other verbs read the type from their input.
+`eval-harvest-coding(7)` teaches the coding method.
+
+| Type | The agent under test receives | It must produce | What scores it |
+|------|------|------|------|
+| review | a PR change at one review round | approve or reject, plus findings | the human verdict and the named defects |
+| coding | an issue-style instruction at the base commit | a patch that fixes the issue | hidden tests, the validation spec, the task rubric, the taste judge, and patch bloat |
+
 ## EXIT STATUS
 
 `0` success · `2` usage error · `3` refusal (input cannot become a datapoint) · `4` verification
@@ -69,4 +82,4 @@ failure (a datapoint is broken) · `5` runtime unavailable (a check could not ru
 
 `eval-harvest-init(1)`, `eval-harvest-survey(1)`, `eval-harvest-capture(1)`,
 `eval-harvest-brief(1)`, `eval-harvest-show(1)`, `eval-harvest-annotate(1)`, `eval-harvest-emit(1)`,
-`eval-harvest-verify(1)`, `eval-harvest-dataset(1)`.
+`eval-harvest-verify(1)`, `eval-harvest-dataset(1)`, `eval-harvest-coding(7)`.
