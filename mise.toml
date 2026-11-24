@@ -63,6 +63,16 @@ description = "Run the black-box end-to-end CLI suite (network-backed). NOT part
 # stdout/stderr shape, the four-field refusal, or the files each verb writes.
 run = "uv run pytest tests/e2e -n0"
 
+[tasks.bench-fix-survey]
+description = "Time `survey --type coding` on a generated 1000-PR repository (NFR-5). NOT part of `check`."
+# Deliberately outside `check`: it is a measurement, not a test — its wall time depends on the machine,
+# so no fixed limit belongs in the gate. It builds the fixture with one `git fast-import`, runs the survey
+# in-process with `--from-json` (no network), and fails only when the survey ranked nothing, saved fewer
+# than 1000 rows, or one PR made more than 6 git calls. The 6-call limit and the page byte budget already
+# have tests in `check`. Run it when the coding survey's git calls or ranking change, and record the
+# result in docs/features/coding-eval-harvest/measurements.md.
+run = "uv run python scripts/bench_fix_survey.py"
+
 [tasks.eval-preflight]
 description = "Check the Lambda MicroVMs environment's imports resolve, by name, before any AWS call."
 # The same preflight `eval.run` runs before dispatch, exposed standalone: there is no CI to hang it

@@ -108,9 +108,9 @@ The FR/NFR/TP ids are planning aids for this spec only. They are not a shipped r
 |--------|----------|-------------|-------------|--------|
 | NFR-1 | Determinism | The same clone and the same forge payload give byte-identical survey files, candidates, patches, and task directories, with the same `content_digest`. | Golden-file tests and a two-emit comparison test. | US-2, inherited NFR-1 |
 | NFR-2 | Offline | `emit`, `verify`, `dataset`, `brief`, `show`, `annotate`, and `survey --page` make no forge call and no `git fetch`. | The existing offline test with `gh`, `glab`, and `git remote` stubbed to fail, extended to the coding verbs. | inherited NFR-2 |
-| NFR-3 | Context budget | One survey page with 20 rows is at most `[TODO: set target — straw man 8 KiB]`. A `brief` for one candidate is at most `[TODO: set target — straw man 12 KiB]`. | A test counts the bytes on a 500-PR fixture. | US-2 north star, PRD §8 |
+| NFR-3 | Context budget | One survey page with 20 rows is at most 8 KiB in the human form and at most 18 KiB with `--json`. A `brief` for one candidate is at most 12 KiB. Targets from G-1 (`measurements.md`): the largest measured pages are 5 500 and 14 003 bytes, the largest brief 8 611 bytes. | A test counts the bytes on a 500-PR fixture. | US-2 north star, PRD §8 |
 | NFR-4 | Forge cost | `survey --type coding` makes the same forge calls as `survey` (one paged `gh pr list` or `glab` query). `capture --type coding` makes one PR call plus one call for each linked issue. | A counting stub in the integration tests. | US-2, inherited NFR-7 |
-| NFR-5 | Scale | `survey --type coding` on 1000 merged PRs completes in at most `[TODO: set target]`. The git calls for each PR have a fixed maximum of 6. | A benchmark on a generated fixture. A counting test for git calls. | US-2 |
+| NFR-5 | Scale | `survey --type coding` on 1000 merged PRs completes in at most 174 s (two times the 87 s median of `mise run bench-fix-survey` on an Apple M2 Pro, G-1). The git calls for each PR have a fixed maximum of 6 (the benchmark measures 3). | A benchmark on a generated fixture. A counting test for git calls. | US-2 |
 | NFR-6 | Dependencies | `[project].dependencies` stays empty. | The existing dependency audit test. | inherited NFR-5 |
 | NFR-7 | Security | Untrusted text (PR bodies, issue bodies, setup steps) never goes to a shell of the CLI. The CLI never runs a setup step. Setup steps go only into Dockerfile `RUN` lines, with the FR-21 limits. | The argv-only rule in `gitcmd.py`. A test that a setup step with a line break is refused. | inherited §3 constraint |
 | NFR-8 | Honesty | A coding datapoint never reports `hidden-tests-proven` as passed in this feature. Every scan proves that it ran with a control token. | The FR-23 test. Guard tests in `tests/integration/test_guards.py`. | CLAUDE.md conventions |
@@ -176,7 +176,7 @@ notebook 03). *Operability:* the CLI is a local tool with no service to operate.
 
 | Risk | Likelihood | Impact | Mitigation | Early warning sign |
 |------|-----------|--------|------------|-------------------|
-| **Low yield:** few merged fixes include tests that fail before the fix | Med | High | FR-11 refusal with the most frequent reason. Measure the yield on 1–2 real repositories before the D and E workstreams finish (PRD §9). | The first real survey excludes more than `[TODO: set]`% of PRs for `no-test-change`. |
+| **Low yield:** few merged fixes include tests that fail before the fix | Med | High | FR-11 refusal with the most frequent reason. Measure the yield on 1–2 real repositories before the D and E workstreams finish (PRD §9). | The first real survey excludes more than 70% of PRs for `no-test-change` (G-1 measured 30% and 59%). |
 | **Unproven datapoints in the dataset:** until a runner exists, a coding datapoint with a wrong fail-to-pass test passes `emit` | High | High | `hidden-tests-proven` is unresolved without a proof file (FR-23). The proof-file contract (FR-35) lets a separate runner resolve the check with no format change. `dataset` counts unproven coding datapoints (FR-32). | A dataset report with `coding_unproven` equal to `coding` while the customer runs `harbor run`. |
 | **A proof from an old task passes a changed task** | Med | High | The proof records the `content_digest`. A different digest gives unresolved, not pass (FR-35). | A proof file older than the task directory. |
 | **Old bases do not build** | Med | High | The agent pins dependencies to `merge_date` (FR-22). The future runner gives the failing step. | The first oracle trials in Harbor fail at image build. |
@@ -990,8 +990,9 @@ descending sequence. `rank_reasons` names each key value in words.
 **Consequences.** The agent continues with `--page n`. The page number is the cursor. A refresh is
 a new `survey --repo` call, and this call overwrites the cache. The sort key cannot express "a
 small fix with a strong issue is better than a large fix with a weak issue". The agent makes that
-judgment from the facts on the page. The size limits are straw-man values
-`[TODO: calibrate on 1–2 real repositories]`.
+judgment from the facts on the page. The size limits were
+calibrated on two real repositories in G-1 and stay at 3, 400, and 12: no size reason excludes more
+than 23% of the merged PRs (`measurements.md`).
 
 ## 12. Testing Plan
 

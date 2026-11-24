@@ -143,3 +143,29 @@ risk-map refusals) are not logged. A forge failure in single-PR `capture` is exi
 so it is not logged either; in a batch the same failure is the item refusal `forge-unavailable`, and
 it is logged. `dataset` reads `tasks/` only and `emit --all` reads `candidates/*.json` only, so
 neither trips on the new directory.
+
+## 2026-11-24 — task G-1, the yield and the targets
+
+**The open NFR-3, NFR-5, §4, and ADR-6 values are set from a measurement on two real repositories
+and a 1000-PR benchmark (`measurements.md`).** On `strands-agents/evals` (`aec44b7`, 305 merged PRs)
+the coding survey ranked 123 PRs, a yield of 40.3%. On `pydantic/pydantic` (`2b555b7`, the newest
+1000 merged PRs) it ranked 289, a yield of 28.9%. The main loss is `no-test-change`: 30.2% and 59.0%
+of the merged PRs. A hand check of the top 10 ranked PRs of each repository found 19 of 20 with a
+new test for the fixed behavior; the other one (evals #26) tests a new API shape. The yield is far
+above 5% on both repositories, so the PRD §9 scope question does not open. The targets apply the
+task's rules. The human survey page keeps 8 KiB (largest 5 500 bytes), and the B-1 test constant
+`8192` does not change. The `--json` page gets its own target, 18 KiB (largest 14 003 bytes, plus
+25%, to the next KiB), because the straw man was for the human page and a JSON row carries its field
+names and the full reason list. The `brief` keeps 12 KiB (largest 8 611 bytes). NFR-5 is 174 s for
+1000 PRs: two times the 87.00 s median of three `mise run bench-fix-survey` runs on an Apple M2 Pro,
+with at most 3 git calls for each PR and one mainline pass. The §4 early-warning value for
+`no-test-change` is 70%, above both measured repositories, so a repository that crosses it has fewer
+tested fixes than either. The ADR-6 thresholds stay at 3, 400, and 12, because no size reason
+excludes more than 30% of the merged PRs (the largest is `source-too-large`, 23.0% on evals).
+
+**`survey --type coding --repo` failed on both repositories, and the PR list came from `gh` by hand.**
+Two runs on each repository exited 5: GraphQL `502`/`504` on evals, and an internal error in the
+`reviews` field on pydantic. The coding survey does not read `reviews`, but `GH_FIELDS` asks for it,
+so one PR whose reviews GitHub cannot serve stops the coding survey. We used `gh pr list` without
+`reviews` and `--from-json`; the result is the same rows the survey would read. A coding-only field
+list is a possible follow-up; it is not part of G-1, which changes no CLI behavior.

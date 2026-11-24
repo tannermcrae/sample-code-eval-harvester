@@ -4,7 +4,7 @@ title: "[Eval] Measure the coding survey yield on real repositories"
 summary: "Run the coding survey on 1–2 real repositories and a 1000-PR benchmark, then set the open size and speed targets."
 feature: coding-eval-harvest
 workstream: Eval
-status: in-progress
+status: done
 complexity: M
 merges: [G-2]
 implements: [NFR-3, NFR-5]
@@ -101,13 +101,13 @@ Then, by hand: `measurements.md` has a row for each repository and for the bench
 
 ## Acceptance Criteria
 
-- [ ] `measurements.md` records the yield, the reason counts, and 10 hand-check lines for each of 2 repositories.
-- [ ] `measurements.md` records the largest page size (human and `--json`) for each repository.
-- [ ] `mise run bench-fix-survey` runs, ranks PRs, and prints the time and the maximum git calls for one PR (≤ 6).
-- [ ] NFR-3 and NFR-5 in the tech plan have numeric targets, not `[TODO]`.
-- [ ] `decisions-tech-plan.md` has one entry with the measured values and the targets.
-- [ ] All commands in "How To Verify" pass.
-- [ ] No regressions in the existing suite (NFR-9).
+- [x] `measurements.md` records the yield, the reason counts, and 10 hand-check lines for each of 2 repositories.
+- [x] `measurements.md` records the largest page size (human and `--json`) for each repository.
+- [x] `mise run bench-fix-survey` runs, ranks PRs, and prints the time and the maximum git calls for one PR (≤ 6).
+- [x] NFR-3 and NFR-5 in the tech plan have numeric targets, not `[TODO]`.
+- [x] `decisions-tech-plan.md` has one entry with the measured values and the targets.
+- [x] All commands in "How To Verify" pass.
+- [x] No regressions in the existing suite (NFR-9).
 
 ## Out Of Scope
 
@@ -128,3 +128,38 @@ Then, by hand: `measurements.md` has a row for each repository and for the bench
 
 **Blocked by:** [B-1](B-1-add-the-paged-coding-survey.md) (the `survey --type coding` command)
 **Blocks:** nothing
+
+## Completion Log
+
+**Completed:** 2026-11-24  ·  **Branch:** `coding-survey-yield-g-1`  ·  **Commit:** the `[G-1]` commit on `main` (squashed; this log is part of it)
+
+**What was implemented:** I ran the coding survey on `strands-agents/evals` (`aec44b7`, 305 merged PRs, 40.3% yield) and on `pydantic/pydantic` (`2b555b7`, 1000 merged PRs, 28.9% yield). I hand-checked the top 10 ranked PRs of each, and measured every page and one brief per repository. I added the NFR-5 benchmark `scripts/bench_fix_survey.py` (median 87.00 s for 1000 PRs, at most 3 git calls for each PR, 1 mainline pass), with a self-check that fails when the survey ranks nothing or saves fewer than 1000 rows. I put the results in `measurements.md` and set the NFR-3, NFR-5, §4, and ADR-6 values in the tech plan.
+
+**Files changed:**
+- `scripts/bench_fix_survey.py` — new: the NFR-5 benchmark (one `git fast-import`, in-process `Cli.run` with `--from-json`, git-call counter, self-check).
+- `mise.toml` — new task `bench-fix-survey`, outside `check`, with a comment that says why.
+- `docs/features/coding-eval-harvest/measurements.md` — new: the raw results and the targets.
+- `docs/features/coding-eval-harvest/tech-plan.md` — NFR-3 (8 KiB human page, 18 KiB `--json` page, 12 KiB brief), NFR-5 (174 s), §4 early warning (70%), ADR-6 consequence (thresholds calibrated and kept).
+- `docs/features/coding-eval-harvest/decisions-tech-plan.md` — one entry with the measured values and the targets.
+
+**Acceptance criteria:**
+- Yield, reason counts, and 10 hand-check lines for each repository: `measurements.md` §Yield and §Hand check.
+- Largest page size, human and `--json`, for each repository: `measurements.md` §Page sizes.
+- `mise run bench-fix-survey` ran three times: `prs=1000 seconds=90.75/86.39/87.00 max_git_calls_per_pr=3 mainline_passes=1`. I saw the self-check fail on two broken copies (nothing ranked → exit 1; 990 rows → exit 1).
+- `grep -n "TODO: set target" tech-plan.md` gives no output.
+- One entry in `decisions-tech-plan.md` (2026-11-24).
+- `mise run bench-fix-survey`, `lint`, `typecheck`, and `check` pass. `check`: 891 passed, 89 skipped.
+- No regressions: the full suite passes in `mise run check`.
+
+**Deviations from the task:**
+- `--json` is a global flag (`eval-harvest --json survey …`). The task's commands put it after the verb, and argparse refuses that with exit 2.
+- `survey --repo` failed with exit 5 two times on each repository: GraphQL 502/504 on evals, and an internal GitHub error in the `reviews` field on pydantic, which repeated. I fetched `gh pr list` by hand with the survey's `GH_FIELDS` without `reviews` (the coding survey does not read it) and ran the survey with `--from-json` and `--repo`. Each number comes from one complete run.
+- NFR-3 now has a separate `--json` page target (18 KiB). The straw man covered only the human page (which the B-1 test measures), and the measured `--json` page (14 003 bytes) is larger than 8 KiB. The human target stays at 8 KiB, so the B-1 constant `8192` does not change.
+- The hand check reads the test diff of the integration commit. It does not run the tests (ADR-2).
+
+**Follow-ups noticed but not done:**
+- No test bounds the `--json` survey page to its new 18 KiB target. `test_page_bytes_below_budget` covers only the human page.
+- `GH_FIELDS` asks for `reviews` on the coding survey too, so one PR whose reviews GitHub cannot serve stops the coding survey (seen on pydantic). A coding-only field list without `reviews` would prevent this.
+- The `[TODO: G-1 sets the final value.]` comment on `_PAGE_BYTE_BUDGET` in `tests/unit/test_fix_survey_pages.py` is now stale (the value stays 8192). The task allows a change to that file only when the target changes.
+- PRD §9 still has the yield `[TODO]`. The task did not list the PRD as a file to change. The value is in `measurements.md`.
+- Some top-ranked pydantic fixes (#14164, #14160) are in `pydantic-core` (Rust), so their environment must build the Rust extension. This matters for the build-success measurement (PRD `[TODO]`, ADR-2).
